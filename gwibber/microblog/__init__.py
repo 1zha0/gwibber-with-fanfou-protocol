@@ -2,7 +2,7 @@
 import operator, traceback, can
 import twitter, jaiku, identica, laconica, pownce
 import digg, flickr, brightkite, rss, pingfm, facebook
-import fanfou  
+import greader, fanfou
 
 # i18n magic
 import gettext
@@ -20,7 +20,8 @@ PROTOCOLS = {
   "laconica": laconica,
   "rss": rss,
   "pingfm": pingfm,
-  "fanfou": fanfou,  
+  "greader": greader,
+  "fanfou": fanfou,
   #"brightkite": brightkite,
 }
 
@@ -63,6 +64,13 @@ class Client:
       # Translators: this message appears in the Errors dialog
       # Indicates with wich action the error happened 
       lambda c: c.send(message), _("send message"), filter, False))
+
+  def send_thread(self, message, target, filter=PROTOCOLS.keys()):
+    return list(self.get_data(
+      lambda a: a["send_enabled"] and supports(a, can.THREAD_REPLY),
+      # Translators: this message appears in the Errors dialog
+      # Indicates with wich action the error happened 
+      lambda c: c.send_thread(message, target), _("send message"), filter, False))
 
   def reply(self, message, filter=PROTOCOLS.keys()):
     return list(self.get_data(
@@ -121,9 +129,10 @@ class Client:
       # Indicates with wich action the error happened       
       lambda c: c.tag(query.lower().replace("#", "")), _("perform tag query"), filter)
 
-  def user_messages(self, screen_name, filter=PROTOCOLS.keys()):
+  def user_messages(self, screen_name, account_id, filter=PROTOCOLS.keys()):
     return self.perform_operation(
-      lambda a: a["receive_enabled"] and supports(a, can.USER_MESSAGES),
+      lambda a: a["receive_enabled"] and supports(a, can.USER_MESSAGES) and \
+        a.id == account_id,
       lambda c: c.user_messages(screen_name), "perform user_messages query", filter)
 
   def group(self, query, filter=PROTOCOLS.keys()):

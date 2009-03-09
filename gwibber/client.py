@@ -9,6 +9,7 @@ import time, os, threading, logging, mx.DateTime, hashlib
 import gtk, gtk.glade, gobject, table, functools, traceback
 import microblog, gwui, config, gintegration, configui
 import xdg.BaseDirectory, resources, urllib2, urlparse
+import webbrowser
 
 # Setup Pidgin
 import pidgin
@@ -37,7 +38,7 @@ gtk.gdk.threads_init()
 
 MAX_MESSAGE_LENGTH = 140
 
-VERSION_NUMBER = "0.8"
+VERSION_NUMBER = "0.9.1"
 
 def N_(message): return message
 
@@ -153,7 +154,7 @@ class GwibberClient(gtk.Window):
           self.add_msg_tab(functools.partial(self.client.tag, query),
             query.replace("#", ""), True, gtk.STOCK_INFO, False, query)
         elif microblog.support.LINK_PARSE.match(query):
-          self.add_tab(functools.partial(self.client.search_url, query),
+          self.add_msg_tab(functools.partial(self.client.search_url, query),
             urlparse.urlparse(query)[1], True, gtk.STOCK_FIND, True, query)
         elif len(query) > 0:
           self.add_msg_tab(functools.partial(self.client.search, query),
@@ -169,7 +170,7 @@ class GwibberClient(gtk.Window):
     self.input.connect("populate-popup", self.on_input_context_menu)
     self.input.connect("activate", self.on_input_activate)
     self.input.connect("changed", self.on_input_change)
-    self.input.set_max_length(140)
+    self.input.set_max_length(MAX_MESSAGE_LENGTH)
 
     self.cancel_button = gtk.Button(_("Cancel"))
     self.cancel_button.connect("clicked", self.on_cancel_reply)
@@ -281,12 +282,19 @@ class GwibberClient(gtk.Window):
           self.handle_error({"username": "None", "protocol": "is.gd"},
             traceback.format_exc(), "Failed to shorten URL")
           self.preferences["shorten_urls"] = False
-          entry.insert_text(text, entry.get_position())
-          gobject.idle_add(lambda: entry.set_position(entry.get_position() + len(text)))
+          self.add_url(entry, text)
           self.preferences["shorten_urls"] = True
         else:
-          entry.insert_text(short, entry.get_position())
-          gobject.idle_add(lambda: entry.set_position(entry.get_position() + len(short)))
+          self.add_url(entry, short)
+
+  def add_url(self, entry, text):
+    # check if current text is longer than MAX_MESSAGE_LENGTH
+    c_text_len=(len(unicode(entry.get_text(), "utf-8")) + len(text))
+    # if so increase input.max_length and allow insertion
+    if c_text_len > MAX_MESSAGE_LENGTH: 
+       self.input.set_max_length(c_text_len)
+    entry.insert_text(text, entry.get_position())
+    gobject.idle_add(lambda: entry.set_position(entry.get_position() + len(text)))
 
   def on_focus_out(self, widget, event):
     if self.last_update:
@@ -316,7 +324,7 @@ class GwibberClient(gtk.Window):
         view = self.add_msg_tab(functools.partial(self.client.tag, query),
           query.replace("#", ""), True, gtk.STOCK_INFO, True, query)
       elif microblog.support.LINK_PARSE.match(query):
-        view = self.add_tab(functools.partial(self.client.search_url, query),
+        view = self.add_msg_tab(functools.partial(self.client.search_url, query),
           urlparse.urlparse(query)[1], True, gtk.STOCK_FIND, True, query)
       elif len(query) > 0:
         view = self.add_msg_tab(functools.partial(self.client.search, query),
@@ -490,7 +498,7 @@ class GwibberClient(gtk.Window):
         return True
       elif uri.startswith("gwibber:group"):
         query = uri.split("/")[-1]
-        view = self.add_tab(lambda: self.client.group(query),
+        view = self.add_msg_tab(lambda: self.client.group(query),
           query, True, gtk.STOCK_INFO, True, query)
         self.update([view.get_parent()])
         return True
@@ -504,9 +512,19 @@ class GwibberClient(gtk.Window):
         return True
       elif uri.startswith("gwibber:user"):
         query = uri.split("/")[-1]
-        view = self.add_user_tab(lambda: self.client.user_messages(query),
+        account_id = uri.split("/")[-2]
+        view = self.add_user_tab(lambda: self.client.user_messages(query, account_id),
           query, True, gtk.STOCK_INFO, True)
         self.update([view.get_parent()])
+        return True
+      elif uri.startswith("gwibber:read"):
+        msg = view.message_store[int(uri.split("/")[-1])]
+        acct = msg.account
+        if acct.supports(microblog.can.READ):
+          if(msg.client.read_message(msg)):
+            self.update([view.get_parent()])
+        else:
+          webbrowser.open (msg.url)
         return True
     else: return False
 
@@ -525,8 +543,20 @@ class GwibberClient(gtk.Window):
   def on_input_change(self, widget):
     self.statusbar.pop(1)
     if len(widget.get_text()) > 0:
-      self.statusbar.push(1, _("Characters remaining: %s") % (
-        widget.get_max_length() - len(unicode(widget.get_text(), "utf-8"))))
+      # get current text length
+      i_textlen=len(unicode(widget.get_text(), "utf-8"))
+      # if current text is longer than MAX_MESSAGE_LENGTH
+      if i_textlen > MAX_MESSAGE_LENGTH:
+        # count chars above MAX_MESSAGE_LENGTH
+        chars=i_textlen - MAX_MESSAGE_LENGTH
+        self.statusbar.push(1, _("Characters remaining: %s" % -chars))
+      else:
+        # if current input.max_length if bigger then MAX_MESSAGE_LENGTH
+        # can reset back to MAX_MESSAGE_LENGTH to prevent typing
+        if self.input.get_max_length() > MAX_MESSAGE_LENGTH:
+          self.input.set_max_length(MAX_MESSAGE_LENGTH)
+        self.statusbar.push(1, _("Characters remaining: %s") % (
+        self.input.get_max_length() - i_textlen))
 
   def on_theme_change(self, *args):
     def on_load_finished(view, frame):
@@ -603,7 +633,6 @@ class GwibberClient(gtk.Window):
     menuView = gtk.Menu()
     menuAccounts = gtk.Menu()
     menuHelp = gtk.Menu()
-    menuTray = gtk.Menu()
 
     accelGroup = gtk.AccelGroup()
     self.add_accel_group(accelGroup)
@@ -682,9 +711,17 @@ class GwibberClient(gtk.Window):
     menuSpinner.set_sensitive(False)
     menuSpinner.set_image(self.throbber)
 
+    actDisplayBubbles = gtk.CheckMenuItem(_("Display bubbles"))
+    self.preferences.bind(actDisplayBubbles, "show_notifications")
+    menuTray = gtk.Menu()
+    menuTray.append(actDisplayBubbles)
     menuTray.append(actRefresh.create_menu_item())
+    menuTray.append(gtk.SeparatorMenuItem())
     menuTray.append(actPreferences.create_menu_item())
+    menuTray.append(actAbout.create_menu_item())
+    menuTray.append(gtk.SeparatorMenuItem())
     menuTray.append(actQuit.create_menu_item())
+    menuTray.show_all()
 
     self.tray_icon.connect("popup-menu", lambda i,b,a: menuTray.popup(
       None, None, gtk.status_icon_position_menu, b, a, self.tray_icon))
@@ -804,24 +841,33 @@ class GwibberClient(gtk.Window):
   def on_input_activate(self, e):
     text = self.input.get_text().strip()
     if text:
+      # don't allow submission if text length is greater than allowed
+      if len(text) > MAX_MESSAGE_LENGTH:
+         return
       # check if reply and target accordingly
       if self.message_target:
         account = self.message_target.account
         if account:
           if account.supports(microblog.can.THREAD_REPLY) and hasattr(self.message_target, "id"):
-            result = account.get_client().send_thread(self.message_target, text)
+            result = self.client.send_thread(text, self.message_target, [account["protocol"]])
           else:
             result = self.client.reply(text, [account["protocol"]])
       # else standard post
       else:
         result = self.client.send(text, microblog.PROTOCOLS.keys())
 
-      # if we get a returned msg we may be able to display it to the user immediately
+      # Strip empties out of the result
+      result = [x for x in result if x]
+
+      # if we get returned message info for the posts we should be able
+      # to display them to the user immediately
       if result: 
-        if hasattr(result, 'client'):
-          self.post_process_message(result)
-          result.is_new = result.is_unread = False
-          self.messages_view.message_store = [result] + self.messages_view.message_store
+        for msg in result:
+          if hasattr(msg, 'text'):
+            self.post_process_message(msg)
+            msg.is_new = msg.is_unread = False
+        self.flag_duplicates(result)
+        self.messages_view.message_store = result + self.messages_view.message_store
         self.messages_view.load_messages()
         self.messages_view.load_preferences(self.get_account_config(), self.get_gtk_theme_prefs())
     
@@ -843,7 +889,7 @@ class GwibberClient(gtk.Window):
     message.aId = message.account.id
 
     if self.last_focus_time:
-      message.is_unread = message.time > self.last_focus_time
+      message.is_unread = (message.time > self.last_focus_time) or (hasattr(message,"is_unread") and message.is_unread)
 
     if self.last_update:
       message.is_new = message.time > self.last_update
@@ -873,9 +919,16 @@ class GwibberClient(gtk.Window):
     return {"red": color.red/255, "green": color.green/255, "blue": color.blue/255}
 
   def get_gtk_theme_prefs(self):
-    return dict((i, self.color_to_dict(
-      getattr(self.get_style(), i)[gtk.STATE_NORMAL].to_string()))
-        for i in ["base", "text", "fg", "bg"])
+    d = {}
+    
+    for i in ["base", "text", "fg", "bg"]:
+      d[i] = self.color_to_dict(
+        getattr(self.get_style(), i)[gtk.STATE_NORMAL].to_string())
+
+      d["%s_selected" % i] = self.color_to_dict(
+        getattr(self.get_style(), i)[gtk.STATE_SELECTED].to_string())
+
+    return d
 
   def show_notification_bubbles(self, messages):
     new_messages = []
@@ -889,7 +942,7 @@ class GwibberClient(gtk.Window):
     gtk.gdk.threads_enter()
     if len(new_messages) > 0:
         for index, message in enumerate(new_messages):
-            body = microblog.support.linkify(microblog.support.xml_escape(message.text))
+            body = microblog.support.xml_escape(message.text)
             image = hasattr(message, "image_path") and message.image_path or ''
             expire_timeout = 5000 + (index*2000) # default to 5 second timeout and increase by 2 second for each notification
             n = gintegration.notify(message.sender, body, image , ["reply", "Reply"], expire_timeout)
@@ -899,7 +952,7 @@ class GwibberClient(gtk.Window):
   def flag_duplicates(self, data):
     seen = []
     for message in data:
-      if message.gId:
+      if hasattr(message, "gId"):
         message.is_duplicate = message.gId in seen
         message.first_seen = False
         if not message.is_duplicate:
