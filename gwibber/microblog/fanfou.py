@@ -78,7 +78,7 @@ class Message:
       self.sender_followers_count = data["user"]["followers_count"]
       self.image = data["user"]["profile_image_url"].split("?")[0]
       self.url = "http://fanfou.com/statuses/%s" % data["id"]
-      self.profile_url = "gwibber:user/%s" % data["user"]["id"]
+      self.profile_url = "gwibber:user/%s/%s" % (self.account.id, data["user"]["id"])
       self.external_profile_url = data["user"]["url"]
 
     if data.has_key("name"):
@@ -88,7 +88,7 @@ class Message:
       self.sender_location = data["location"]
       self.sender_followers_count = data["followers_count"]
       self.image = data["profile_image_url"].split("?")[0]
-      self.url = data["url"]
+      self.url = self.profile_url = self.external_profile_url = data["url"]
       self.is_reply = False
       if data["protected"] == True:
         self.text = _("This user has protected their updates.") + ' ' + _("You need to send a request before you can view this person's timeline.") + ' ' + _("Send request...")
@@ -127,7 +127,7 @@ class SearchResult:
     self.image = data["user"]["profile_image_url"].split("?")[0]
     self.bgcolor = "message_color"
     self.url = "http://fanfou.com/statuses/%s" % data["id"]
-    self.profile_url = "gwibber:user/%s" % data["user"]["id"]
+    self.profile_url = "gwibber:user/%s/%s" % (self.account.id, data["user"]["id"])
     self.external_profile_url = data["user"]["url"]
 
     if query: html = support.highlight_search_results(self.text, query)
@@ -226,10 +226,10 @@ class Client:
         urllib.urlencode({"status":message, "source": "gwibbernet"})))
     return Message(self, data)
 
-  def send_thread(self, msg, message):
+  def send_thread(self, message, target):
     data = simplejson.loads(self.connect(
       "http://api.fanfou.com/statuses/update.json",
         urllib.urlencode({"status":message,
-          "in_reply_to_status_id":msg.id, "source": "gwibbernet"})))
+          "in_reply_to_status_id":target.id, "source": "gwibbernet"})))
     return Message(self, data)
 
