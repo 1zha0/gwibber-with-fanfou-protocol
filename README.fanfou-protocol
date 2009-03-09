@@ -1,0 +1,21 @@
+************************************************************
+*                                                          *
+*               Fanfou Protocol for Gwibber                *
+*                                                          *
+************************************************************
+
+This is a fanfou protocol made for Gwibber, now it supports
+send, receive and search messages, and compatible with 0.9.1.
+
+Checklist:
+ui/preferences.glade          - UI setting for fanfou interface
+gwibber/microblog/fanfou.py   - main fanfou protocol
+gwibber/microblog/__init__.py - Setting for load protocols
+
+Howto: 
+http://blog.liangz.info/2009/03/gwibber-fanfou-plugin-for-gwibber.html
+
+
+                                                   Liang
+
+                                               Mar 9, 2009
