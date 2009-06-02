@@ -45,8 +45,10 @@ class Message:
     self.bgcolor = "message_color"
     self.url = IMAGE_PAGE_URL % (data["owner"], data["id"])
     self.profile_url = "http://www.flickr.com/people/%s" % (data["owner"])
-    self.thumbnail = IMAGE_URL % (data["farm"], data["server"], data["id"], data["secret"], "t")
-    self.html_string = """<a href="%s"><img src="%s" /></a>""" % (self.url, self.thumbnail)
+    self.thumbnails = [{
+      "src": IMAGE_URL % (data["farm"], data["server"], data["id"], data["secret"], "m"),
+      "href": self.url
+    }]
 
 class Client:
   def __init__(self, acct):

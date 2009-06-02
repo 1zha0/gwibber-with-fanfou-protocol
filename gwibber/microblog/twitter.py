@@ -34,6 +34,8 @@ PROTOCOL_INFO = {
     can.REPLY,
     can.RESPONSES,
     can.DELETE,
+    can.RETWEET,
+    can.LIKE,
     #can.THREAD,
     can.THREAD_REPLY,
     can.SEARCH_URL,
@@ -60,6 +62,7 @@ class Message:
       user = data["user"]
       self.reply_nick = data["in_reply_to_screen_name"]
       self.reply_url = "https://twitter.com/%s/statuses/%s" % (data["in_reply_to_screen_name"], data["in_reply_to_status_id"])
+      self.reply_id = data["in_reply_to_status_id"]
     elif "sender" in data:
       user = data["sender"]
       self.reply_nick = None
@@ -115,6 +118,7 @@ class SearchResult:
     self.sender_id = data["from_user_id"]
     self.time = support.parse_time(data["created_at"])
     self.text = data["text"]
+    self.id = data["id"]
     self.image = data["profile_image_url"]
     self.bgcolor = "message_color"
     self.url = "https://twitter.com/%s/statuses/%s" % (data["from_user"], data["id"])
@@ -212,6 +216,14 @@ class Client:
   def user_messages(self, screen_name):
     for data in self.get_user_messages(screen_name):
       yield Message(self, data)
+
+  def delete(self, message):
+    return simplejson.loads(self.connect(
+      "https://twitter.com/statuses/destroy/%s.json" % message.id, {}))
+
+  def like(self, message):
+    return simplejson.loads(self.connect(
+      "https://twitter.com/favorites/create/%s.json" % message.id, {}))
 
   def send(self, message):
     data = simplejson.loads(self.connect(

@@ -21,6 +21,7 @@ Installing Gwibber
     * python-distutils-extra
     * python-feedparser (4.1)
     * python-xdg (0.15)
+    * python-mako (0.2.2)
 
   Installation
   ------------

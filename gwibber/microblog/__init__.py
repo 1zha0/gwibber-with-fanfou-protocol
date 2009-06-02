@@ -1,7 +1,8 @@
 
 import operator, traceback 
 from . import can
-from . import twitter, jaiku, identica, laconica, pownce, fanfou
+from . import twitter, jaiku, identica, laconica, pownce
+from . import twitter, jaiku, identica, laconica, pownce, friendfeed, fanfou
 from . import digg, flickr, brightkite, rss, pingfm, facebook
 from . import greader
 
@@ -11,10 +12,11 @@ import gettext
 _ = gettext.lgettext
 
 PROTOCOLS = {
-  #"jaiku": jaiku,
+  "jaiku": jaiku,
   "digg": digg,
   "twitter": twitter,
   "facebook": facebook,
+  "friendfeed": friendfeed,
   "flickr": flickr,
   #"pownce": pownce,
   "identica": identica,
@@ -22,7 +24,7 @@ PROTOCOLS = {
   "rss": rss,
   "pingfm": pingfm,
   "greader": greader,
-  #"brightkite": brightkite,
+  "brightkite": brightkite,
   "fanfou": fanfou,
 }
 

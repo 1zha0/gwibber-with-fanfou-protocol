@@ -4,7 +4,7 @@ Paths to various Gwibber files and resources
 SegPhault (Ryan Paul) - 11/22/2008
 """
 
-import os, sys
+import os, sys, config, gtk
 
 PROGRAM_NAME = "gwibber"
 UI_DIR_NAME = "ui"
@@ -39,7 +39,8 @@ def get_theme_paths():
       for f in sorted(os.listdir(theme_root)):
         if not f.startswith('.'):
           theme_dir = os.path.join(theme_root, f)
-          if os.path.isdir(theme_dir):
+          if os.path.isdir(theme_dir) and \
+             os.path.exists(os.path.join(theme_dir, "template.mako")):
             yield theme_dir
 
 def get_theme_path(name):
@@ -59,3 +60,29 @@ def get_ui_asset(asset_name):
     asset_path = os.path.join(base, UI_DIR_NAME, asset_name)
     if os.path.exists(asset_path):
       return asset_path
+
+def get_template_dirs():
+  for base in DATA_DIRS:
+    p = os.path.join(base, UI_DIR_NAME, "templates")
+    if os.path.exists(p):
+      yield p
+
+def get_theme_asset(asset_name):
+  theme_path = get_theme_path(config.Preferences()["theme"])
+  if theme_path:
+    fname = os.path.join(theme_path, asset_name)
+    if os.path.exists(fname):
+      return fname
+
+def icon(name, size=16, use_theme=True):
+  if use_theme:
+    theme_path = get_theme_path(config.Preferences()["theme"])
+    if theme_path:
+      fname = os.path.join(theme_path, name)
+      for ext in [".svg", ".png"]:
+        if os.path.exists(fname + ext):
+          return fname + ext
+  
+  theme = gtk.icon_theme_get_default()
+  finfo = theme.lookup_icon(name, size, 0)
+  return finfo.get_filename() if finfo else None

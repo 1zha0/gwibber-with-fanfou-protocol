@@ -22,7 +22,7 @@ PROTOCOL_INFO = {
   ],
 }
 
-API_KEY = "ee001e6b5e35f5a8b57cbca3126632db"
+API_KEY = "7c3d2c111be8979ac236eecddf6679e7"
 
 class Client:
   def __init__(self, acct):
@@ -36,5 +36,5 @@ class Client:
     urllib2.urlopen(urllib2.Request(url, urllib.urlencode(data))).read()
 
   def send(self, message):
-    return self.connect("https://api.ping.fm/v1/user.post",
+    return self.connect("http://api.ping.fm/v1/user.post",
       {"post_method": "microblog", "body": message})

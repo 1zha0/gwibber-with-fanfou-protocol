@@ -416,6 +416,11 @@ def _persistency_link_color_button(button, key, default="black", *args, **kwargs
 
 create_persistency_link.append_handler(gtk.ColorButton, _persistency_link_color_button)
 
+def _persistency_link_font_button(button, key, *args, **kwargs):
+  return PersistencyLink(button, button.get_font_name, button.set_font_name, "font-set", GConfValue(key, Spec.STRING, *args, **kwargs))
+
+create_persistency_link.append_handler(gtk.FontButton, _persistency_link_font_button)
+
 def _persistency_link_range(range, key, *args, **kwargs):
   return PersistencyLink(range, lambda: int(range.get_value()), range.set_value, "value-changed", GConfValue(key, Spec.INT, *args, **kwargs))
 

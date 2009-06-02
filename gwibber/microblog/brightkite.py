@@ -11,7 +11,7 @@ from xml.dom import minidom
 
 PROTOCOL_INFO = {
   "name": "BrightKite",
-  "version": 0.1,
+  "version": 0.2,
   
   "config": [
     "password",
@@ -23,18 +23,17 @@ PROTOCOL_INFO = {
 
   "features": [
     #can.SEND,
-    #can.RECEIVE,
+    can.RECEIVE,
     #can.SEARCH,
     #can.REPLY,
-    #can.RESPONSES,
+    can.RESPONSES,
     #can.DELETE,
-    #can.THREAD,
+    can.THREAD,
     can.GEO_FRIEND_POSITIONS
   ],
 }
 
 NICK_PARSE = re.compile("@([A-Za-z0-9]+)")
-HASH_PARSE = re.compile("#([A-Za-z0-9_\-.]+)")
 
 class Message:
   def __init__(self, client, data):
@@ -42,19 +41,61 @@ class Message:
     self.account = client.account
     self.protocol = client.account["protocol"]
     self.username = client.account["username"]
-    self.sender = data["user"]["name"]
-    self.sender_nick = data["user"]["screen_name"]
-    self.sender_id = data["user"]["id"]
+
+    self.sender = data["creator"]["fullname"]
+    self.sender_nick = data["creator"]["login"]
+    self.sender_id = data["creator"]["login"]
+    self.image = data["creator"]["small_avatar_url"]
+    
     self.time = support.parse_time(data["created_at"])
-    self.text = support.xml_escape(data["text"])
-    self.image = data["user"]["profile_image_url"]
+    self.text = data["body"] or ""
     self.bgcolor = "message_color"
-    self.url = "http://identi.ca/notice/%s" % data["id"] # % (data["user"]["screen_name"], data["id"])
-    self.profile_url = "http://identi.ca/%s" % data["user"]["screen_name"]
+    self.id = data["id"]
+    
+    self.url = "http://brightkite.com/objects/%s" % data["id"]
+    self.profile_url = "http://brightkite.com/people/%s" % self.sender_nick
+    
     self.html_string = '<span class="text">%s</span>' % \
-      HASH_PARSE.sub('#<a class="inlinehash" href="http://identi.ca/tag/\\1">\\1</a>',
-        NICK_PARSE.sub('@<a class="inlinenick" href="http://identi.ca/\\1">\\1</a>',
-          support.linkify(self.text)))
+      NICK_PARSE.sub('@<a class="inlinenick" href="http://brightkite.com/people/\\1">\\1</a>',
+        support.linkify(self.text))
+    
+    self.is_reply = ("@%s" % self.username) in self.text
+    self.can_thread = data["comments_count"] > 0
+
+    # Geolocation
+    self.location_lon = data["place"]["longitude"]
+    self.location_lat = data["place"]["latitude"]
+    self.location_id = data["place"]["id"]
+    self.location_name = data["place"]["name"]
+    self.location_fullname = data["place"]["display_location"]
+    self.geo_position = (self.location_lat, self.location_lon)
+
+    if "photo" in data:
+      self.thumbnails = [{"src": data["photo"], "href": data["photo"]}]
+
+class Comment:
+  def __init__(self, client, data):
+    self.client = client
+    self.account = client.account
+    self.protocol = client.account["protocol"]
+    self.username = client.account["username"]
+
+    self.sender = data["user"]["fullname"]
+    self.sender_nick = data["user"]["login"]
+    self.sender_id = data["user"]["login"]
+    self.image = data["user"]["small_avatar_url"]
+    
+    self.time = support.parse_time(data["created_at"])
+    self.text = data["comment"]
+    self.bgcolor = "message_color"
+    
+    self.url = "http://brightkite.com/objects/%s" % data["place_object"]["id"]
+    self.profile_url = "http://brightkite.com/people/%s" % self.sender_nick
+    
+    self.html_string = '<span class="text">%s</span>' % \
+      NICK_PARSE.sub('@<a class="inlinenick" href="http://brightkite.com/people/\\1">\\1</a>',
+        support.linkify(self.text))
+    
     self.is_reply = ("@%s" % self.username) in self.text
 
 class FriendPosition:
@@ -76,8 +117,8 @@ class FriendPosition:
     self.is_reply = False
 
     # Geolocation
-    self.location_longitude = data["place"]["longitude"]
-    self.location_latitude = data["place"]["latitude"]
+    self.location_lon = data["place"]["longitude"]
+    self.location_lat = data["place"]["latitude"]
     self.location_id = data["place"]["id"]
     self.location_name = data["place"]["name"]
     self.location_fullname = data["place"]["display_location"]
@@ -92,24 +133,33 @@ class Client:
 
   def connect(self, url, data = None):
     return urllib2.urlopen(urllib2.Request(
-      url, data, {"Authorization": self.get_auth()})).read()
+      url, data, {"Authorization": self.get_auth()}))
 
   def get_friend_positions(self):
-    return simplejson.loads(self.connect(
+    return simplejson.load(self.connect(
       "http://brightkite.com/me/friends.json"))
 
   def get_messages(self):
-    return simplejson.loads(self.connect(
-      "http://identi.ca/api/statuses/friends_timeline.json"))
+    return simplejson.load(self.connect(
+      "http://brightkite.com/me/friendstream.json"))
 
   def get_responses(self):
-    return simplejson.loads(self.connect(
-      "http://identi.ca/api/statuses/replies.json"))
+    return simplejson.load(self.connect(
+      "http://brightkite.com/me/mentionsstream.json"))
+
+  def get_thread_data(self, msg):
+    return simplejson.load(self.connect(
+      "http://brightkite.com/objects/%s/comments.json" % msg.id))
 
   def get_search(self, query):
     return minidom.parseString(urllib2.urlopen(
       urllib2.Request("http://identi.ca/search/notice/rss",
         urllib.urlencode({"q": query}))).read()).getElementsByTagName("item")
+
+  def get_thread(self, msg):
+    yield msg
+    for data in self.get_thread_data(msg):
+      yield Comment(self, data)
 
   def friend_positions(self):
     for data in self.get_friend_positions():

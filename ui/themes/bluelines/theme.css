@@ -1,0 +1,96 @@
+<%include file="css.mako" />
+
+body {
+  word-break: break-word;
+  color: white;
+}
+
+a { color: white; }
+
+a:hover, .time a:hover { text-decoration: underline; }
+
+td { vertical-align: top; }
+
+p { line-height: 125% }
+
+.message {
+  padding: 5px;
+  padding-bottom: 10px;
+  margin-bottom: 5px;
+  text-shadow: 1px 1px black;
+  -webkit-border-radius: 7px;
+  display: block;
+  min-height: 65px;
+}
+
+.content {
+  margin-top: 0px;
+}
+
+.title {
+  font-size: large;
+  font-weight: bold;
+}
+
+.time {
+  font-size: small;
+}
+
+.time a {
+  text-decoration: none;
+}
+
+.imgbox {
+  width: 48px;
+  height: 48px;
+  margin-right: 5px;
+  background-image: url('');
+  background-repeat: no-repeat;
+  -webkit-border-radius: 7px;
+  -webkit-box-reflect:below 0px -webkit-gradient(linear, left top, left bottom, from(transparent), color-stop(0.6, transparent), to(rgba(0,0,0, 0.6)));
+}
+
+.inlinenick {
+  text-decoration: none;
+  font-weight: bold;       
+}
+
+.messages h1 {
+  text-align: center;
+}
+
+.replybutton {
+  float: right;
+  display: none;
+  margin: 0px;
+  padding: 0px;
+  margin-top: -10px;
+}
+
+.unread {
+  border: 3px solid rgba(110, 240, 255, 0.8);
+  border-style: ridge;
+}
+
+.reply {
+  border: 3px solid rgba(143, 6, 32, 0.8);
+  border-style: ridge;
+}
+
+.private {
+  border: 3px solid rgba(255, 44, 188, 0.8);
+  border-style: ridge;
+}
+
+.dupes {
+  display: none;
+  margin-top: 10px;
+}
+
+.toggledupe {
+  float: right;
+}
+
+.fold a {
+  text-decoration: none;
+}

@@ -1,0 +1,105 @@
+<%include file="css.mako" />
+
+body {
+  word-break: break-word;
+  color: #222;
+  font-family: Sans-serif;
+  margin: 4px;
+  margin-right: 1px;
+}
+
+a {
+  color: #204a87;
+  outline: none;
+}
+
+.time a { color: #666 }
+a:hover { text-decoration: underline; }
+
+
+td { vertical-align: top; }
+
+p { line-height: 125% }
+
+.message {
+  padding: 5px;
+  padding-bottom: 10px;
+  margin-bottom: 5px;
+  -webkit-border-radius: 7px;
+  display: block;
+
+  background: rgba(0,0,0,0.1);
+  border: 1px solid #aaa;
+}
+
+.content {
+  margin-top: 0px;
+}
+
+.title {
+  font-size: 105%;
+  font-weight: bold;
+}
+
+.time a {
+  text-decoration: none;
+  font-size: 80%;
+}
+
+.imgbox {
+  width: 40px;
+  height: 40px;
+  margin-right: 5px;
+  -webkit-background-size: 100% 100%;
+  background-image: url('');
+  background-repeat: no-repeat;
+  -webkit-border-radius: 3px;
+  -webkit-box-reflect:below 0px -webkit-gradient(linear, left top, left bottom, from(transparent), color-stop(0.6, transparent), to(rgba(0,0,0, 0.6)));
+}
+
+.inlinenick {
+  text-decoration: none;
+  font-weight: bold;       
+}
+
+.messages h1 {
+  text-align: center;
+}
+
+.replybutton {
+  float: right;
+  display: none;
+  margin: 0px;
+  padding: 0px;
+  margin-top: -15px;
+}
+
+.unread {
+  border: 2px solid #888;
+}
+
+.reply {
+  border: 2px solid #777;
+}
+
+.private {
+  border: 2px solid #777;
+}
+
+.dupes {
+  display: none;
+  margin-top: 10px;
+}
+
+.toggledupe {
+  float: right;
+}
+
+.fold {
+}
+
+.fold a {
+  text-decoration: none;
+}
+
+

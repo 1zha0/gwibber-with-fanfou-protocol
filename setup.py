@@ -7,20 +7,20 @@ from DistUtilsExtra.command import *
 from glob import glob
 
 setup(name="gwibber",
-      version="1.0.2",
+      version="1.2.0",
       author="Ryan Paul",
       author_email="segphault@arstechnica.com",
-      url="http://cixar.com/~segphault",
+      url="http://launchpad.net/gwibber/",
       license="GNU General Public License (GPL)",
       packages=['gwibber', 'gwibber.microblog',
           'gwibber.microblog.support', 'gwibber.urlshorter'],
       data_files=[
     ('share/gwibber/ui/', glob("ui/*.glade")),
     ('share/gwibber/ui/', glob("ui/*.png")),
-    ('share/gwibber/ui/themes/default', glob("ui/themes/default/*")),
-    ('share/gwibber/ui/themes/defaultsmall', glob("ui/themes/defaultsmall/*")),
-    ('share/gwibber/ui/themes/funkatron', glob("ui/themes/funkatron/*")),
-    ('share/gwibber/ui/themes/shine', glob("ui/themes/shine/*")),
+    ('share/gwibber/ui/templates/', glob("ui/templates/*.mako")),
+    ('share/gwibber/ui/themes/bluelines', glob("ui/themes/bluelines/*")),
+    ('share/gwibber/ui/themes/gwilouche', glob("ui/themes/gwilouche/*")),
+    ('share/gwibber/ui/themes/dark-gwilouche', glob("ui/themes/dark-gwilouche/*")),
     ('share/gwibber/ui', ['ui/progress.gif']),
     ('share/gwibber/ui', ['ui/gwibber.svg']),
     ('share/pixmaps', ['ui/gwibber.svg'])

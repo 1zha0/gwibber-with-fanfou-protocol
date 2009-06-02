@@ -7,6 +7,9 @@ import gettext
 
 _ = gettext.lgettext
 
+def button_url(w, url):
+  gintegration.load_url(url)
+
 class AccountManager(config.Accounts):
   def __init__(self, path = config.GCONF_ACCOUNTS_DIR):
     self.accounts = self
@@ -17,7 +20,7 @@ class AccountManager(config.Accounts):
 
     glade = gtk.glade.XML(resources.get_ui_asset("preferences.glade"))
     dialog = glade.get_widget("facebook_config")
-    dialog.show_all()
+    dialog.show()
 
     def on_validate_click(w):
       fb = facelib.Facebook(microblog.facebook.APP_KEY, microblog.facebook.SECRET_KEY,
@@ -27,6 +30,9 @@ class AccountManager(config.Accounts):
       if data and "session_key" in data:
         account["secret_key"] = str(data["secret"])
         account["session_key"] = str(data["session_key"])
+
+        info = fb.users.getInfo([fb.uid],["name"])[0]
+        account["username"] = str(info["name"])
         
         m = gtk.MessageDialog(None, 0, gtk.MESSAGE_INFO, gtk.BUTTONS_OK,
           _("Keys obtained successfully."))
@@ -37,11 +43,14 @@ class AccountManager(config.Accounts):
       m.run()
       m.destroy()
     
-    glade.get_widget("button_request").connect("clicked",
-      lambda *a: gintegration.load_url("http://www.facebook.com/code_gen.php?v=1.0&api_key=%s" % microblog.facebook.APP_KEY))
+    glade.get_widget("button_request").connect(
+      "clicked", button_url, "http://www.facebook.com/code_gen.php?v=1.0&api_key=%s" % microblog.facebook.APP_KEY)
     
-    glade.get_widget("button_authorize").connect("clicked",
-      lambda *a: gintegration.load_url("http://www.facebook.com/authorize.php?api_key=%s&v=1.0&ext_perm=status_update" % microblog.facebook.APP_KEY))
+    for auth in ["publish_stream", "read_stream", "status_update"]:
+      w = glade.get_widget("button_authorize_%s" % auth)
+      if w:
+        w.connect("clicked", button_url, 
+          "http://www.facebook.com/authorize.php?api_key=%s&v=1.0&ext_perm=%s" % (microblog.facebook.APP_KEY, auth))
 
     glade.get_widget("button_apply_auth").connect("clicked", on_validate_click)
     glade.get_widget("button_close_facebook_auth").connect("clicked", lambda w: dialog.destroy())
@@ -62,7 +71,7 @@ class AccountManager(config.Accounts):
 
     try:
       lb = glade.get_widget("%s_linkbutton" % acct["protocol"])
-      lb.connect("clicked", lambda *a: gintegration.load_url(lb.get_uri()))
+      lb.connect("clicked", button_url, lb.get_uri())
     except: pass
 
     if create:
@@ -77,7 +86,7 @@ class AccountManager(config.Accounts):
         lambda a: self.facebook_authorize(acct))
 
     if create:
-      dialog.set_title(_("Create %s account") % acct["protocol"])
+      dialog.set_title(_("Add %s account") % acct["protocol"])
     else:
       dialog.set_title(_("Edit %s account") % acct["protocol"])
 

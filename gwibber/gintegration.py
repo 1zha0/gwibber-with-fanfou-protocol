@@ -20,6 +20,10 @@ class DBusManager(dbus.service.Object):
   def external_invoke(self):
     self.client.external_invoke()
 
+  @dbus.service.method(DBUS_NAME)
+  def send_message(self, msg):
+    self.client.client.send(msg)
+
 
 # FIXME: Move this to the manager class
 try:
@@ -59,13 +63,13 @@ def service_is_running(name):
     "org.freedesktop.DBus", "/org/freedesktop/DBus"),
       "org.freedesktop.DBus").ListNames()
 
-def create_tomboy_note(text, display = True):
+def create_tomboy_note(text):
   obj = dbus.SessionBus().get_object("org.gnome.Tomboy", "/org/gnome/Tomboy/RemoteControl")
   tomboy = dbus.Interface(obj, "org.gnome.Tomboy.RemoteControl")
   
   n = tomboy.CreateNote()
+  tomboy.DisplayNote(n)
   tomboy.SetNoteContents(n, text)
-  if display: tomboy.DisplayNote(n)
 
 def set_pidgin_status_text(message):
   bus = dbus.SessionBus()

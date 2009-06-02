@@ -11,7 +11,7 @@ import urllib2, urllib, re, simplejson, urlparse
 
 PROTOCOL_INFO = {
   "name": "Jaiku",
-  "version": 0.1,
+  "version": 0.3,
   
   "config": [
     "private:password",
@@ -44,7 +44,11 @@ class Message:
     self.sender = "%s %s" % (data["user"]["first_name"], data["user"]["last_name"])
     self.sender_nick = data["user"]["nick"]
     self.sender_id = data["user"]["nick"]
-    self.time = support.parse_time(data["created_at"])
+
+    # Jaiku's timestamp format is lousy
+    d, t = data["created_at"].split("T")
+    self.time = support.parse_time(d + t.replace("-", ":"))
+
     self.text = ""
     if "title" in data:
       self.text = data["title"]
@@ -118,23 +122,17 @@ class Client:
       if "id" in data: yield Message(self, data)
       else: yield Comment(self, data)
 
-  def get_nonce(self, msg):
-    try:
-      page = urllib2.urlopen(urllib2.Request(
-        ("#" in msg.url and msg.url.split("#")[0] or msg.url),
-          urllib.urlencode({"user": self.account["username"], 
-            "personal_key":self.account["private:password"]}))).read()
-      
-      return NONCE_PARSE.match(page, 1).group(1)
-    except: return None
-
   def send_thread(self, message, target):
-    nonce = self.get_nonce(target)
-    if nonce:
-      return urllib2.urlopen(urllib2.Request(
-        ("#" in target.url and target.url.split("#")[0] or target.url),
-          urllib.urlencode({"user": self.account["username"], "_nonce": nonce, 
-            "personal_key":self.account["private:password"], "comment": message}))).read()
+    print urllib2.urlopen(urllib2.Request("http://api.jaiku.com/json",
+      urllib.urlencode({
+        "method": "entry_add_comment",
+        "user": self.account["username"],
+        "personal_key":self.account["private:password"],
+        "stream": "stream/%s@jaiku.com/comments" % self.account["username"],
+        "entry": "stream/%s@jaiku.com/presence/%s" % (target.sender_nick, target.id),
+        "nick": "%s@jaiku.com" % self.account["username"],
+        "content": message
+      }))).read()
 
   def send(self, message):
     urllib2.urlopen(urllib2.Request(

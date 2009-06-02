@@ -30,6 +30,8 @@ PROTOCOL_INFO = {
     can.REPLY,
     can.RESPONSES,
     can.DELETE,
+    can.LIKE,
+    can.RETWEET,
     can.TAG,
     can.GROUP,
     #can.THREAD,
@@ -64,6 +66,7 @@ class Message:
       screen_names = NICK_PARSE.match(self.text)
       self.reply_nick = screen_names.group(0)[1:] if screen_names else data['in_reply_to_user_id']
       self.reply_url = "http://identi.ca/notice/%s" % data["in_reply_to_status_id"]
+      self.reply_id = data["in_reply_to_status_id"]
     else:
       user = data["sender"]
       self.reply_nick = None
@@ -191,6 +194,14 @@ class Client:
   def user_messages(self, screen_name):
     for data in self.get_user_messages(screen_name):
       yield Message(self, data)
+
+  def delete(self, message):
+    return simplejson.loads(self.connect(
+      "https://identi.ca/api/statuses/destroy/%s.json" % message.id, {}))
+
+  def like(self, message):
+    return simplejson.loads(self.connect(
+      "https://identi.ca/api/favorites/create/%s.json" % message.id, {}))
 
   def send(self, message):
     data = simplejson.loads(self.connect(

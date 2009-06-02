@@ -22,6 +22,7 @@ PROTOCOL_INFO = {
     "receive_enabled",
     "send_enabled",
     "search_enabled",
+    "allow_insecure",
   ],
 
   "features": [
@@ -31,6 +32,8 @@ PROTOCOL_INFO = {
     can.REPLY,
     can.RESPONSES,
     can.DELETE,
+    can.LIKE,
+    can.RETWEET,
     can.TAG,
     can.GROUP,
     #can.THREAD,
@@ -116,53 +119,53 @@ class Client:
   def __init__(self, acct):
     self.account = acct
 
+  def url(self, path):
+    d = self.account["domain"]
+    if d.startswith("http://") or d.startswith("https://"): return d + path
+    if self.account["allow_insecure"]: return "http://" + d + path
+    return "https://" + d + path
+
   def get_auth(self):
     return "Basic %s" % base64.encodestring(
       ("%s:%s" % (self.account["username"], self.account["private:password"]))).strip()
 
   def connect(self, url, data = None):
     return urllib2.urlopen(urllib2.Request(
-      url, data, {"Authorization": self.get_auth()})).read()
+      self.url(url), data, {"Authorization": self.get_auth()}))
 
   def get_messages(self):
-    return simplejson.loads(self.connect(
-      "https://%s/api/statuses/friends_timeline.json" % self.account["domain"]))
+    return simplejson.load(self.connect("/api/statuses/friends_timeline.json"))
 
   def get_user_messages(self, screen_name):
     try:
-      return simplejson.loads(self.connect(
-        "https://%s/api/statuses/user_timeline/"+ screen_name + ".json" % self.account["domain"],
+      return simplejson.load(self.connect(
+        "/api/statuses/user_timeline/%s.json" % screen_name,
           urllib.urlencode({"count": self.account["receive_count"] or "20"})))
     except Exception:
-      profile = [simplejson.loads(self.connect(
-        "https://%s/api/users/show/"+ screen_name +".json" % self.account["domain"]))]
+      profile = [simplejson.load(
+        self.connect("/api/users/show/%s.json" % screen_name))]
       return profile
 
-
   def get_responses(self):
-    return simplejson.loads(self.connect(
-      "https://%s/api/statuses/replies.json" % self.account["domain"]))
+    return simplejson.load(self.connect("/api/statuses/replies.json"))
 
   def get_direct_messages(self):
-    return simplejson.loads(self.connect(
-      "https://%s/api/direct_messages.json" % self.account["domain"]))
+    return simplejson.load(self.connect("/api/direct_messages.json"))
 
   def get_search(self, query):
     return simplejson.load(urllib2.urlopen(
-      urllib2.Request("https://%s/api/search.json" % self.account["domain"],
+      urllib2.Request(self.url("/api/search.json"),
         urllib.urlencode({"q": query}))))["results"]
 
   def get_tag(self, query):
     return feedparser.parse(urllib2.urlopen(
-      urllib2.Request("https://%s/index.php" % self.account["domain"],
-        urllib.urlencode({"action": "tagrss", "tag":
-          query}))))["entries"]
+      urllib2.Request(self.url("/index.php"),
+        urllib.urlencode({"action": "tagrss", "tag": query}))))["entries"]
 
   def get_group(self, query):
     return feedparser.parse(urllib2.urlopen(
-      urllib2.Request("https://%s/index.php" % self.account["domain"],
-        urllib.urlencode({"action": "grouprss", "nickname":
-          query}))))["entries"]
+      urllib2.Request(self.url("/index.php"),
+        urllib.urlencode({"action": "grouprss", "nickname": query}))))["entries"]
 
   def search(self, query):
     for data in self.get_search(query):
@@ -193,15 +196,21 @@ class Client:
     for data in self.get_user_messages(screen_name):
       yield Message(self, data)
 
+  def delete(self, message):
+    return simplejson.load(self.connect(
+      "/api/statuses/destroy/%s.json" % message.id, {}))
+
+  def like(self, message):
+    return simplejson.loads(self.connect(
+      "/api/favorites/create/%s.json" % message.id, {}))
+  
   def send(self, message):
-    data = simplejson.loads(self.connect(
-      "https://%s/api/statuses/update.json" % self.account["domain"],
-        urllib.urlencode({"status":message, "source": "Gwibber"})))
+    data = simplejson.load(self.connect("/api/statuses/update.json",
+      urllib.urlencode({"status": message, "source": "Gwibber"})))
     return Message(self, data)
 
   def send_thread(self, message, target):
-    data = simplejson.loads(self.connect(
-      "https://%s/api/statuses/update.json" % self.account["domain"],
-        urllib.urlencode({"status":message,
-            "in_reply_to_status_id":target.id, "source": "Gwibber"})))
+    data = simplejson.loads(self.connect("/api/statuses/update.json",
+      urllib.urlencode({"status": message,
+        "in_reply_to_status_id": target.id, "source": "Gwibber"})))
     return Message(self, data)
