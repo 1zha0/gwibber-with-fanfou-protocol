@@ -4,7 +4,8 @@ Facebook interface for Gwibber
 SegPhault (Ryan Paul) - 12/22/2007
 """
 
-import urllib2, urllib, re, support, can, mx.DateTime
+from . import can, support
+import urllib2, urllib, re, mx.DateTime
 
 PROTOCOL_INFO = {
   "name": "Facebook",
@@ -39,7 +40,7 @@ class Message:
     self.data = data
     self.sender = data['name']
     self.sender_nick = self.sender
-    self.sender_id = self.sender.replace(" ","_")
+    self.sender_id = self.sender.replace(" ", "_")
     self.profile_url = data['profile_url']
     self.url = data['profile_url']
     if data['status']:
@@ -59,7 +60,7 @@ class Message:
       self.image = "http://digg.com/img/udl.png"
    except Exception:
     from traceback import format_exc
-    print format_exc()
+    print(format_exc())
 
 class Client:
   def __init__(self, acct):

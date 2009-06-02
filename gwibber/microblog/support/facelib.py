@@ -505,7 +505,7 @@ class PhotosProxy(PhotosProxy):
             data = StringIO.StringIO()
             img.save(data, img.format)
 
-        content_type, body = self.__encode_multipart_formdata(list(args.iteritems()), [(image, data)])
+        content_type, body = self.__encode_multipart_formdata(list(args.items()), [(image, data)])
         h = httplib.HTTP('api.facebook.com')
         h.putrequest('POST', '/restserver.php')
         h.putheader('Content-Type', content_type)
@@ -682,7 +682,7 @@ class Facebook(object):
             node.hasAttribute('list') and \
             node.getAttribute('list')=="true":
             return self._parse_response_list(node)
-        elif len(filter(lambda x: x.nodeType == x.ELEMENT_NODE, node.childNodes)) > 0:
+        elif len([x for x in node.childNodes if x.nodeType == x.ELEMENT_NODE]) > 0:
             return self._parse_response_dict(node)
         else:
             return ''.join(node.data for node in node.childNodes if node.nodeType == node.TEXT_NODE)
@@ -691,7 +691,7 @@ class Facebook(object):
     def _parse_response_dict(self, node):
         """Parses an XML dictionary response node from Facebook."""
         result = {}
-        for item in filter(lambda x: x.nodeType == x.ELEMENT_NODE, node.childNodes):
+        for item in [x for x in node.childNodes if x.nodeType == x.ELEMENT_NODE]:
             result[item.nodeName] = self._parse_response_item(item)
         if node.nodeType == node.ELEMENT_NODE and node.hasAttributes():
             if node.hasAttribute('id'):
@@ -702,14 +702,14 @@ class Facebook(object):
     def _parse_response_list(self, node):
         """Parses an XML list response node from Facebook."""
         result = []
-        for item in filter(lambda x: x.nodeType == x.ELEMENT_NODE, node.childNodes):
+        for item in [x for x in node.childNodes if x.nodeType == x.ELEMENT_NODE]:
             result.append(self._parse_response_item(item))
         return result
 
 
     def _check_error(self, response):
         """Checks if the given Facebook response is an error, and then raises the appropriate exception."""
-        if type(response) is dict and response.has_key('error_code'):
+        if isinstance(response, dict) and 'error_code' in response:
             raise FacebookError(response['error_code'], response['error_msg'], response['request_args'])
 
 
@@ -718,10 +718,10 @@ class Facebook(object):
         if args is None:
             args = {}
 
-        for arg in args.items():
-            if type(arg[1]) == list:
+        for arg in list(args.items()):
+            if isinstance(arg[1], list):
                 args[arg[0]] = ','.join(str(a) for a in arg[1])
-            elif type(arg[1]) == unicode:
+            elif isinstance(arg[1], unicode):
                 args[arg[0]] = arg[1].encode("UTF-8")
 
         args['method'] = method
@@ -943,7 +943,7 @@ class Facebook(object):
         if timeout and '%s_time' % prefix in post and time.time() - float(post['%s_time' % prefix]) > timeout:
             return None
 
-        args = dict([(key[len(prefix + '_'):], value) for key, value in args.items() if key.startswith(prefix)])
+        args = dict([(key[len(prefix + '_'):], value) for key, value in list(args.items()) if key.startswith(prefix)])
 
         hash = self._hash_args(args)
 
@@ -968,24 +968,24 @@ if __name__ == '__main__':
     facebook.login()
 
     # Login to the window, then press enter
-    print 'After logging in, press enter...'
+    print('After logging in, press enter...')
     raw_input()
 
     facebook.auth.getSession()
-    print 'Session Key:   ', facebook.session_key
-    print 'Your UID:      ', facebook.uid
+    print('Session Key:   ', facebook.session_key)
+    print('Your UID:      ', facebook.uid)
 
     info = facebook.users.getInfo([facebook.uid], ['name', 'birthday', 'affiliations', 'sex'])[0]
 
-    print 'Your Name:     ', info['name']
-    print 'Your Birthday: ', info['birthday']
-    print 'Your Gender:   ', info['sex']
+    print('Your Name:     ', info['name'])
+    print('Your Birthday: ', info['birthday'])
+    print('Your Gender:   ', info['sex'])
 
     friends = facebook.friends.get()
     friends = facebook.users.getInfo(friends[0:5], ['name', 'birthday', 'relationship_status'])
 
     for friend in friends:
-        print friend['name'], 'has a birthday on', friend['birthday'], 'and is', friend['relationship_status']
+        print(friend['name'], 'has a birthday on', friend['birthday'], 'and is', friend['relationship_status'])
 
     arefriends = facebook.friends.areFriends([friends[0]['uid']], [friends[1]['uid']])
 

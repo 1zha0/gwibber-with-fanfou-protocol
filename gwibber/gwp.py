@@ -49,8 +49,10 @@ import gconf
 import gobject
 import gtk
 try:
-  import gnomekeyring
-except: pass
+  gnomekeyring = None
+  #import gnomekeyring
+except:
+  gnomekeyring = None
 
 from swp import *
 
@@ -136,7 +138,7 @@ class GConfValue(object):
     # data
     def get_data(self):
 
-        if self.private:
+        if self.private and gnomekeyring:
             try:
                 return gnomekeyring.find_items_sync(
                   gnomekeyring.ITEM_GENERIC_SECRET, {"id": self.key})[0].secret
@@ -153,13 +155,13 @@ class GConfValue(object):
     
     def set_data(self, value):
 
-        if self.private:
+        if self.private and gnomekeyring:
             try:
                 token = gnomekeyring.item_create_sync(
                   gnomekeyring.get_default_keyring_sync(),
                   gnomekeyring.ITEM_GENERIC_SECRET, "Gwibber preference %s" % self.key,
                   {"id": self.key}, value, True)
-                self._setter(self.key, ":KEYRING:%s" % token)
+                return self._setter(self.key, ":KEYRING:%s" % token)
             except gnomekeyring.NoMatchError:
                 pass
 
@@ -192,7 +194,7 @@ class GConfValue(object):
     # Other methods
     def set_callback(self, on_changed):
     
-        assert on_changed is None or callable(on_changed)
+        assert on_changed is None or hasattr(on_changed, '__call__')
         
         if self._notify_id is not None:
             self.client_notify_remove(self._notify_id)
@@ -249,7 +251,7 @@ class RadioButtonPersistencyLink:
         self.gconf_value.set_callback(self._on_gconf_changed)
         
         notify_widget = False
-        for key, widget in widgets.iteritems():
+        for key, widget in widgets.items():
             if not notify_widget:
                 widget.connect("toggled", self._on_widget_changed)
                 notify_widget = True

@@ -8,7 +8,8 @@ Liang Zhao<alpha.roc@gmail.com> - 03/08/2009
 
 """
 
-import urllib2, urllib, base64, re, support, can, simplejson
+from . import can, support
+import urllib2, urllib, base64, re, simplejson
 import gettext
 _ = gettext.lgettext
 
@@ -45,6 +46,7 @@ PROTOCOL_INFO = {
 NICK_PARSE = re.compile("\B@([A-Za-z0-9_]+|@[A-Za-z0-9_]$)")
 HASH_PARSE = re.compile("\B#([A-Za-z0-9_\-]+|@[A-Za-z0-9_\-]$)")
 
+
 class Message:
   def __init__(self, client, data):
    try:
@@ -61,57 +63,51 @@ class Message:
       user = data["user"]
       self.reply_nick = data["in_reply_to_screen_name"]
       self.reply_url = "http://fanfou.com/statuses/%s" % data["in_reply_to_status_id"]
-    else:
+    elif "sender" in data:
       user = data["sender"]
       self.reply_nick = None
       self.reply_url = None
+    elif "name" in data:
+      user = data
 
     self.sender = user["name"]
     self.sender_nick = user["screen_name"]
     self.sender_id = user["id"]
+    self.sender_location = user["location"]
+    self.sender_followers_count = user["followers_count"]
+    self.image = user["profile_image_url"].split("?")[0]
+    self.url = "http://fanfou.com/statuses/%s" % self.id
+    self.profile_url = "gwibber:user/%s/%s" % (self.account.id, user["id"])
+    self.external_profile_url = "http://fanfou.com/%s" % user["id"]
+    #self.external_profile_url = user["url"]
 
-    if data.has_key("user"):
-      self.sender = data["user"]["name"]
-      self.sender_nick = data["user"]["screen_name"]
-      self.sender_id = data["user"]["id"]
-      self.sender_location = data["user"]["location"]
-      self.sender_followers_count = data["user"]["followers_count"]
-      self.image = data["user"]["profile_image_url"].split("?")[0]
-      self.url = "http://fanfou.com/statuses/%s" % data["id"]
-      self.profile_url = "gwibber:user/%s/%s" % (self.account.id, data["user"]["id"])
-      self.external_profile_url = data["user"]["url"]
-
-    if data.has_key("name"):
-      self.sender = data["name"]
-      self.sender_nick = data["screen_name"]
-      self.sender_id = data["id"]
-      self.sender_location = data["location"]
-      self.sender_followers_count = data["followers_count"]
-      self.image = data["profile_image_url"].split("?")[0]
-      self.url = self.profile_url = self.external_profile_url = data["url"]
-      self.is_reply = False
-      if data["protected"] == True:
-        self.text = _("This user has protected their updates.") + ' ' + _("You need to send a request before you can view this person's timeline.") + ' ' + _("Send request...")
-        self.html_string = '<p><b>' + _("This user has protected their updates.") + '</b><p>' + _("You need to send a request before you can view this person's timeline.") + '<p><a href="' + self.url + '">' + _("Send request...") + '</a>'
-      else:
-        self.text = self.html_string = ''
-
-    if data.has_key("text"):
+    if "text" in data:
       self.text = data["text"]
       self.html_string = '<span class="text">%s</span>' % \
           HASH_PARSE.sub('#<a class="inlinehash" href="gwibber:tag/\\1">\\1</a>',
-          NICK_PARSE.sub('@<a class="inlinenick" href="gwibber:user/\\1">\\1</a>',
+          NICK_PARSE.sub('@<a class="inlinenick" href="gwibber:user/'+self.account.id+'/\\1">\\1</a>',
           support.linkify(self.text)))
       self.is_reply = re.compile("@%s[\W]+|@%s$" % (self.username, self.username)).search(self.text)
       self.reply_nick = ''
       self.reply_url = ''
+    else:
+      # if reached a protected gwibber:user tab then do some things differently
+      if "name" in data:
+        self.url = self.profile_url = self.external_profile_url = "http://fanfou.com/%s" % data["id"]
+        #self.url = self.profile_url = self.external_profile_url = data["url"]
+        self.is_reply = False
+        if data["protected"] == True:
+          self.text = _("This user has protected their updates.") + ' ' + _("You need to send a request before you can view this person's timeline.") + ' ' + _("Send request...")
+          self.html_string = '<p><b>' + _("This user has protected their updates.") + '</b><p>' + _("You need to send a request before you can view this person's timeline.") + '<p><a href="' + self.url + '">' + _("Send request...") + '</a>'
+        else:
+          self.text = self.html_string = ''
 
-    if data.has_key("in_reply_to_user_id"):
+    if "in_reply_to_screen_name" in data and "in_reply_to_status_id" in data and data["in_reply_to_status_id"]:
       self.reply_nick = data["in_reply_to_screen_name"]
       self.reply_url = "http://fanfou.com/statuses/%s" % data["in_reply_to_status_id"]
    except Exception:
     from traceback import format_exc
-    print format_exc()
+    print (format_exc())
 
 class SearchResult:
   def __init__(self, client, data, query = None):
@@ -128,7 +124,8 @@ class SearchResult:
     self.bgcolor = "message_color"
     self.url = "http://fanfou.com/statuses/%s" % data["id"]
     self.profile_url = "gwibber:user/%s/%s" % (self.account.id, data["user"]["id"])
-    self.external_profile_url = data["user"]["url"]
+    self.external_profile_url = "https://fanfou.com/%s" % data["user"]["id"]
+    #self.external_profile_url = data["user"]["url"]
 
     if query: html = support.highlight_search_results(self.text, query)
     else: html = self.text
@@ -160,17 +157,17 @@ class Client:
 
   def connect(self, url, data = None):
     return urllib2.urlopen(urllib2.Request(
-      url, data, {"Authorization": self.get_auth()})).read()
+      url, data, headers = {"Authorization": self.get_auth()})).read()
 
   def get_messages(self):
     return simplejson.loads(self.connect(
-      "http://api.fanfou.com/statuses/friends_timeline.json",
+      "http://api.fanfou.com/statuses/friends_timeline.json" +'?'+
         urllib.urlencode({"count": self.account["receive_count"] or "20"})))
 
   def get_user_messages(self, screen_name):
     try:
       return simplejson.loads(self.connect(
-        "http://api.fanfou.com/statuses/user_timeline/"+ screen_name + ".json",
+        "http://api.fanfou.com/statuses/user_timeline/"+ screen_name + ".json" +'?'+
           urllib.urlencode({"count": self.account["receive_count"] or "20"})))
     except Exception:
       profile = [simplejson.loads(self.connect(
@@ -179,7 +176,7 @@ class Client:
 
   def get_replies(self):
     return simplejson.loads(self.connect(
-      "http://api.fanfou.com/statuses/replies.json",
+      "http://api.fanfou.com/statuses/replies.json" +'?'+
         urllib.urlencode({"count": self.account["receive_count"] or "20"})))
 
   def get_direct_messages(self):

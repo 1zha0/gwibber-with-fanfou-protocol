@@ -7,12 +7,13 @@ from DistUtilsExtra.command import *
 from glob import glob
 
 setup(name="gwibber",
-      version="0.7",
+      version="1.0.2",
       author="Ryan Paul",
       author_email="segphault@arstechnica.com",
       url="http://cixar.com/~segphault",
       license="GNU General Public License (GPL)",
-      packages=['gwibber', 'gwibber.microblog', 'gwibber.microblog.support'],
+      packages=['gwibber', 'gwibber.microblog',
+          'gwibber.microblog.support', 'gwibber.urlshorter'],
       data_files=[
     ('share/gwibber/ui/', glob("ui/*.glade")),
     ('share/gwibber/ui/', glob("ui/*.png")),
