@@ -52,6 +52,9 @@ class AccountManager(config.Accounts):
         w.connect("clicked", button_url, 
           "http://www.facebook.com/authorize.php?api_key=%s&v=1.0&ext_perm=%s" % (microblog.facebook.APP_KEY, auth))
 
+        if config.Preferences()["facebook_beta"]:
+          w.show()
+
     glade.get_widget("button_apply_auth").connect("clicked", on_validate_click)
     glade.get_widget("button_close_facebook_auth").connect("clicked", lambda w: dialog.destroy())
 
