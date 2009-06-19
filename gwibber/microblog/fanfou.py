@@ -36,6 +36,8 @@ PROTOCOL_INFO = {
     can.REPLY,
     can.RESPONSES,
     can.DELETE,
+    can.RETWEET,
+    can.LIKE,
     #can.THREAD,
     can.THREAD_REPLY,
     can.SEARCH_URL,
@@ -71,7 +73,7 @@ class Message:
       user = data
 
     self.sender = user["name"]
-    self.sender_nick = user["screen_name"]
+    self.sender_nick = user["id"]
     self.sender_id = user["id"]
     self.sender_location = user["location"]
     self.sender_followers_count = user["followers_count"]
@@ -216,6 +218,14 @@ class Client:
   def user_messages(self, screen_name):
     for data in self.get_user_messages(screen_name):
       yield Message(self, data)
+
+  def delete(self, message):
+    return simplejson.loads(self.connect(
+      "http://api.fanfou.com/statuses/destroy/%s.json" % message.id, {}))
+
+  def like(self, message):
+    return simplejson.loads(self.connect(
+      "http://api.fanfou.com/favorites/create/%s.json" % message.id, {}))
 
   def send(self, message):
     data = simplejson.loads(self.connect(
