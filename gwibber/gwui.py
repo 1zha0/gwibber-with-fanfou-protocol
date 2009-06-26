@@ -114,6 +114,9 @@ class MessageView(webkit.WebView):
   def link_handler(self, uri):
     pass
 
+  def clear(self):
+    self.load_html_string("", "file://%s/" % resources.get_theme_path(self.theme))
+
 class UserView(MessageView):
   def load_messages(self, message_store = None): # override
     if (self.message_store and len(self.message_store) > 0):

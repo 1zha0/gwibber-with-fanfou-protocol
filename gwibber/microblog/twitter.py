@@ -24,6 +24,7 @@ PROTOCOL_INFO = {
     "send_enabled",
     "search_enabled",
     "receive_count",
+    "public_enabled",
   ],
 
   "features": [
@@ -40,6 +41,7 @@ PROTOCOL_INFO = {
     can.THREAD_REPLY,
     can.SEARCH_URL,
     can.USER_MESSAGES,
+    can.PUBLIC,
   ],
 }
 
@@ -57,6 +59,9 @@ class Message:
     self.id = data["id"] or ''
     self.time = support.parse_time(data["created_at"])
     self.is_private  = False
+
+    # set the program source of the message
+    self.source = data.get('source',False)
 
     if "user" in data:
       user = data["user"]
@@ -148,6 +153,11 @@ class Client:
     return self.account["receive_enabled"] and \
       self.account["username"] != None and \
       self.account["private:password"] != None
+      
+  def public_enabled(self):
+    return self.account["public_enabled"] and \
+      self.account["username"] != None and \
+      self.account["private:password"] != None
 
   def get_auth(self):
     return "Basic %s" % base64.encodestring(
@@ -161,6 +171,15 @@ class Client:
     return simplejson.loads(self.connect(
       "https://twitter.com/statuses/friends_timeline.json" +'?'+
       urllib.urlencode({"count": self.account["receive_count"] or "20"})))
+
+  def get_public_timeline(self):
+    return simplejson.loads(self.connect(
+      "https://twitter.com/statuses/public_timeline.json" +'?'+
+      urllib.urlencode({"count": self.account["receive_count"] or "20"})))
+
+  def public_timeline(self):
+      for data in self.get_public_timeline():
+          yield Message(self, data) 
 
   def get_user_messages(self, screen_name):
     try:
@@ -237,4 +256,3 @@ class Client:
         urllib.urlencode({"status":message,
           "in_reply_to_status_id":target.id, "source": "gwibbernet"})))
     return Message(self, data)
-

@@ -50,13 +50,15 @@ CONFIGURABLE_UI_ELEMENTS = {
   "editor": N_("_Editor"),
   "statusbar": N_("_Statusbar"),
   "tray_icon": N_("Tray _Icon"),
+  "public_view": N_("_Public Timeline"),
 }
 
 CONFIGURABLE_ACCOUNT_ACTIONS = {
   # Translators: these are checkbox
   "receive": N_("_Receive Messages"),
   "send": N_("_Send Messages"),
-  "search": N_("Search _Messages")
+  "search": N_("Search _Messages"),
+  "public": N_("_Public Timeline")
   }
 
 DEFAULT_PREFERENCES = {
@@ -76,7 +78,10 @@ DEFAULT_PREFERENCES = {
 }
 
 for _i in list(CONFIGURABLE_UI_ELEMENTS.keys()):
-  DEFAULT_PREFERENCES["show_%s" % _i] = True
+  if _i == "public_view":
+    DEFAULT_PREFERENCES["show_%s" % _i] = True
+  else:
+    DEFAULT_PREFERENCES["show_%s" % _i] = False
 
 try:
   import indicate
@@ -167,6 +172,7 @@ class GwibberClient(gtk.Window):
     self.tabs.set_scrollable(True)
     self.messages_view = self.add_msg_tab(self.client.receive, _("Messages"), show_icon = "go-home")
     self.add_msg_tab(self.client.responses, _("Replies"), show_icon = "mail-reply-all", add_indicator=True)
+    self.public_view = self.add_msg_tab(self.client.public_timeline, _("Public"), show_icon = "language-selector", add_indicator=True, can_toggle=True, show_notifications=False)
 
     saved_position = config.GCONF.get_list("%s/%s" % (config.GCONF_PREFERENCES_DIR, "saved_position"), config.gconf.VALUE_INT)
     if saved_position:
@@ -224,7 +230,7 @@ class GwibberClient(gtk.Window):
 
     self.statusbar = gtk.Statusbar()
     self.statusbar.pack_start(self.status_icon, False, False)
-
+    
     layout.pack_start(self.setup_menus(), False)
     layout.pack_start(vb, True, True)
     layout.pack_start(self.statusbar, False)
@@ -393,9 +399,12 @@ class GwibberClient(gtk.Window):
       if view:
         self.update([view.get_parent()])
 
-  def add_scrolled_parent(self, view, text, show_close=False, show_icon=None, make_active=False, save=None):
+  def add_scrolled_parent(self, view, text, show_close=False, show_icon=None, make_active=False, save=None, can_toggle=False, show_notifications=True):
     scroll = gtk.ScrolledWindow()
     scroll.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
+    scroll.show_notifications = show_notifications
+    # Tabs that can be toggled (like public timeline) should be excluded from the parent show_all() - they will maintain their own state
+    scroll.set_no_show_all(can_toggle)
     scroll.add(view)
     scroll.saved_query = save
     view.scroll = scroll
@@ -422,13 +431,13 @@ class GwibberClient(gtk.Window):
     btn.connect("clicked", self.on_tab_close, scroll)
     self.on_theme_change()
 
-  def add_msg_tab(self, data_handler, text, show_close=False, show_icon=None, make_active=False, save=None, add_indicator=False):
+  def add_msg_tab(self, data_handler, text, show_close=False, show_icon=None, make_active=False, save=None, add_indicator=False, can_toggle=False, show_notifications=True):
     view = gwui.MessageView(self.preferences["theme"], self)
     view.link_handler = self.on_link_clicked
     view.data_retrieval_handler = data_handler
     view.add_indicator = add_indicator
 
-    self.add_scrolled_parent(view, text, show_close, show_icon, make_active, save)
+    self.add_scrolled_parent(view, text, show_close, show_icon, make_active, save, can_toggle, show_notifications)
     return view
 
   def add_user_tab(self, data_handler, text, show_close=False, show_icon=None, make_active=False, save=None):
@@ -510,7 +519,13 @@ class GwibberClient(gtk.Window):
       if hasattr(self, i):
         getattr(self, i).set_property(
           "visible", self.preferences["show_%s" % i])
-
+        # If we have a parent, and if that parent has no_show_all=True, we're dealing with a tab which can be toggled, so set the visible property on the parent to hide it properly as required
+        if hasattr(getattr(self, i), "parent") and getattr(self, i).parent.props.no_show_all:
+            getattr(self, i).parent.set_property(
+              "visible", self.preferences["show_%s" % i])
+            # If the tab isn't visible clear messages, better to see no data than stale data upon reveal
+            if not getattr(self, i).parent.props.visible : getattr(self, i).clear()
+      
     self.set_property("skip-taskbar-hint",
       self.preferences["hide_taskbar_entry"])
 
@@ -848,13 +863,13 @@ class GwibberClient(gtk.Window):
     self.last_clear = mx.DateTime.gmt()
     for tab in self.tabs.get_children():
       view = tab.get_child()
-      view.execute_script("clearMessages()")
+      view.clear()
 
   def on_clear_tab(self, mi):
     self.last_clear = mx.DateTime.gmt()
     n = self.tabs.get_current_page()
     view = self.tabs.get_nth_page(n).get_child()
-    view.execute_script("clearMessages()")
+    view.clear()
 
   def on_errors_show(self, *args):
     self.status_icon.hide()
@@ -1117,7 +1132,7 @@ class GwibberClient(gtk.Window):
 
         for tab in self.target_tabs:
           view = tab.get_child()
-          if view:
+          if view and view.props.visible:
             view.message_store = [m for m in
               view.data_retrieval_handler() if not self.last_clear or m.time > self.last_clear
               and m.time <= mx.DateTime.gmt()]
@@ -1129,7 +1144,7 @@ class GwibberClient(gtk.Window):
               self.manage_indicator_items(view.message_store, tab_num=self.tabs.page_num(tab))
 
             gtk.gdk.threads_leave()
-            self.show_notification_bubbles(view.message_store)
+            if tab.show_notifications: self.show_notification_bubbles(view.message_store)
 
         self.statusbar.pop(0)
         self.statusbar.push(0, _("Last update: %s") % time.strftime("%X"))

@@ -21,6 +21,7 @@ PROTOCOL_INFO = {
     "send_enabled",
     "search_enabled",
     "receive_count",
+    "public_enabled",
   ],
 
   "features": [
@@ -37,6 +38,7 @@ PROTOCOL_INFO = {
     #can.THREAD,
     can.THREAD_REPLY,
     can.USER_MESSAGES,
+    can.PUBLIC,
   ],
 }
 
@@ -71,6 +73,8 @@ class Message:
       user = data["sender"]
       self.reply_nick = None
       self.reply_url = None
+
+    self.source = data.get('source',False)
 
     self.sender = user["name"]
     self.sender_nick = user["screen_name"]
@@ -122,6 +126,9 @@ class Client:
     return "Basic %s" % base64.encodestring(
       ("%s:%s" % (self.account["username"], self.account["private:password"]))).strip()
 
+  def public_enabled(self):
+    return self.account["public_enabled"]
+
   def connect(self, url, data = None):
     return urllib2.urlopen(urllib2.Request(
       url, data, {"Authorization": self.get_auth()})).read()
@@ -140,6 +147,15 @@ class Client:
       profile = [simplejson.loads(self.connect(
         "https://identi.ca/api/users/show/"+ screen_name +".json"))]
       return profile
+  
+  def get_public_timeline(self):
+    return simplejson.loads(self.connect(
+      "https://identi.ca/api/statuses/public_timeline.json",
+      urllib.urlencode({"num": self.account["receive_count"] or "20"})))
+
+  def public_timeline(self):
+      for data in self.get_public_timeline():
+          yield Message(self, data) 
 
   def get_responses(self):
     return simplejson.loads(self.connect(

@@ -4,7 +4,7 @@ from . import can
 from . import twitter, jaiku, identica, laconica, pownce
 from . import twitter, jaiku, identica, laconica, pownce, friendfeed, fanfou
 from . import digg, flickr, brightkite, rss, pingfm, facebook
-from . import greader
+from . import greader, qaiku
 
 # i18n magic
 import gettext
@@ -26,6 +26,7 @@ PROTOCOLS = {
   "greader": greader,
   "brightkite": brightkite,
   "fanfou": fanfou,
+  "qaiku": qaiku,
 }
 
 def supports(a, feature):
@@ -144,3 +145,10 @@ class Client:
       # Translators: this message appears in the Errors dialog
       # Indicates with wich action the error happened       
       lambda c: c.group(query.lower().replace("!", "")), _("perform group query"), filter)
+    
+  def public_timeline(self, filter=list(PROTOCOLS.keys())):
+    return self.perform_operation(
+      lambda a: a["public_enabled"] and supports(a, can.PUBLIC),
+      # Translators: this message appears in the Errors dialog
+      # Indicates with wich action the error happened 
+      lambda c: c.public_timeline(), _("retrieve public timeline"), filter)

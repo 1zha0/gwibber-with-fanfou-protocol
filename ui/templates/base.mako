@@ -84,6 +84,9 @@
   
 <%def name="timestring(data)" filter="trim">
   <a href="gwibber:read/${data.message_index}">${data.time_string}</a>
+  % if hasattr(data, "source") and data.source:
+    <a>${_("from")} ${data.source}</a>
+  % endif
   % if hasattr(data, "reply_nick") and data.reply_nick:
     <a href="${data.reply_url}">${_("in reply to")} ${data.reply_nick}</a>
   % endif
@@ -141,7 +144,7 @@
 
 <%def name="toggledupe(data)">
   % if len(data.dupes) > 0:
-    <div class="toggledupe"><img src="${resources.icon('list-add')}" /></div>
+    <div class="toggledupe"><img width="16px" src="${resources.icon('list-add')}" /></div>
   % endif
 </%def>
 

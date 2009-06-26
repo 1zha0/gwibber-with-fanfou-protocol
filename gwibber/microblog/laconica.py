@@ -73,6 +73,8 @@ class Message:
       self.reply_nick = None
       self.reply_url = None
 
+    self.source = data.get('source',False)
+
     self.sender = user["name"]
     self.sender_nick = user["screen_name"]
     self.sender_id = user["id"]

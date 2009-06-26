@@ -23,6 +23,7 @@ PROTOCOL_INFO = {
     "send_enabled",
     "search_enabled",
     "receive_count",
+    "public_enabled",
   ],
 
   "features": [
@@ -37,6 +38,7 @@ PROTOCOL_INFO = {
     can.DELETE,
     can.SEARCH_URL,
     can.USER_MESSAGES,
+    can.PUBLIC,
   ],
 }
 
@@ -135,6 +137,9 @@ class Client:
     return self.account["receive_enabled"] and \
       self.account["username"] != None and \
       self.account["private:password"] != None
+      
+  def public_enabled(self):
+    return self.account["public_enabled"]
 
   def get_auth(self):
     return "Basic %s" % base64.encodestring(
@@ -148,6 +153,15 @@ class Client:
     return simplejson.loads(self.connect(
       "https://friendfeed.com/api/feed/home?" +
       urllib.urlencode({"num": self.account["receive_count"] or "80"})))["entries"]
+      
+  def get_public_timeline(self):
+    return simplejson.loads(self.connect(
+      "http://friendfeed.com/api/feed/public" +'?'+
+      urllib.urlencode({"num": self.account["receive_count"] or "20"})))["entries"]
+
+  def public_timeline(self):
+      for data in self.get_public_timeline():
+          yield Message(self, data) 
 
   def get_user_messages(self, screen_name):
     try:
