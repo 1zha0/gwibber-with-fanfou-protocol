@@ -19,7 +19,17 @@
 }
 
 .location {
-  background: url(${resources.icon("gnome-globe")}) left no-repeat;
+  background: url(${util.icon("gnome-globe")}) left no-repeat;
   padding-left: 20px;
   min-height: 16px;
+}
+
+.viewmore p {
+  text-align: center;
+}
+
+span.rtl {
+	text-align: right;
+	direction: rtl;
+	display: block;
 }

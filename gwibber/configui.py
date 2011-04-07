@@ -52,9 +52,6 @@ class AccountManager(config.Accounts):
         w.connect("clicked", button_url, 
           "http://www.facebook.com/authorize.php?api_key=%s&v=1.0&ext_perm=%s" % (microblog.facebook.APP_KEY, auth))
 
-        if config.Preferences()["facebook_beta"]:
-          w.show()
-
     glade.get_widget("button_apply_auth").connect("clicked", on_validate_click)
     glade.get_widget("button_close_facebook_auth").connect("clicked", lambda w: dialog.destroy())
 
@@ -89,7 +86,7 @@ class AccountManager(config.Accounts):
         lambda a: self.facebook_authorize(acct))
 
     if create:
-      dialog.set_title(_("Add %s account") % acct["protocol"])
+      dialog.set_title(_("Create %s account") % acct["protocol"])
     else:
       dialog.set_title(_("Edit %s account") % acct["protocol"])
 
@@ -126,7 +123,6 @@ class AccountManager(config.Accounts):
     col_receive = gtk.CellRendererToggle()
     col_send = gtk.CellRendererToggle()
     col_search = gtk.CellRendererToggle()
-    col_public = gtk.CellRendererToggle()
 
     def generate_account_name(acct):
       if hasattr(acct.get_protocol(), "account_name"):
@@ -144,16 +140,12 @@ class AccountManager(config.Accounts):
       ["search", (col_search, {
         "active": lambda a: a["search_enabled"],
         "visible": lambda a: a.supports(microblog.can.SEARCH)}), _("Search")],
-      ["public", (col_public, {
-        "active": lambda a: a["public_enabled"],
-        "visible": lambda a: a.supports(microblog.can.PUBLIC)}), _("Public")],
       ["protocol", lambda a: a.get_protocol().PROTOCOL_INFO["name"], _("Protocol")],
     ])
 
     col_receive.connect("toggled", toggle_table_checkbox, "receive_enabled", data)
     col_send.connect("toggled", toggle_table_checkbox, "send_enabled", data)
     col_search.connect("toggled", toggle_table_checkbox, "search_enabled", data)
-    col_public.connect("toggled", toggle_table_checkbox, "public_enabled", data)
 
     for a in self.accounts: data += a
     

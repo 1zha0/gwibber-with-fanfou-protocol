@@ -1,8 +1,0 @@
-[Desktop Entry]
-Name=Gwibber Microblogging Client
-Type=Application
-Comment=Microblogging client for GNOME
-Exec=gwibber
-Icon=gwibber
-Categories=Network;
-GenericName=Microblogging Client

@@ -9,8 +9,8 @@ SegPhault (Ryan Paul) - 11/08/2008
 
 """
 
-from . import can, support
-import urlparse, logging, feedparser
+from . import support
+import urlparse, feedparser
 import urllib, urllib2, re
 import webbrowser
 
@@ -37,7 +37,7 @@ class Message:
   def __init__(self, client, data):
     self.client = client
     self.account = client.account
-    self.protocol = client.account["protocol"]
+    self.service = client.account["service"]
     self.username = client.account["username"]
 
     self.source = ""

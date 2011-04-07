@@ -24,7 +24,6 @@ PROTOCOL_INFO = {
     "send_enabled",
     "search_enabled",
     "receive_count",
-    "public_enabled",
   ],
 
   "features": [

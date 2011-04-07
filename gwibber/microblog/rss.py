@@ -34,7 +34,7 @@ class Message:
   def __init__(self, client, data):
     self.client = client
     self.account = client.account
-    self.protocol = client.account["protocol"]
+    self.service = client.account["service"]
     self.sender = data.get("author", "")
     self.sender_nick = self.sender
     self.sender_id = self.sender

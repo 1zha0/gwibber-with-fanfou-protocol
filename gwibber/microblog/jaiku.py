@@ -6,7 +6,7 @@ SegPhault (Ryan Paul) - 01/05/2008
 
 """
 
-from . import can, support
+from . import support
 import urllib2, urllib, re, simplejson, urlparse
 
 PROTOCOL_INFO = {
@@ -23,11 +23,11 @@ PROTOCOL_INFO = {
   ],
 
   "features": [
-    can.SEND,
-    can.RECEIVE,
-    can.REPLY,
-    can.THREAD,
-    can.THREAD_REPLY,
+    "send",
+    "receive",
+    "reply",
+    "thread",
+    "send_thread",
   ],
 }
 
@@ -38,7 +38,7 @@ class Message:
   def __init__(self, client, data):
     self.client = client
     self.account = client.account
-    self.protocol = client.account["protocol"]
+    self.service = client.account["service"]
     self.username = client.account["username"]
     if "id" in data: self.id = data["id"]
     self.sender = "%s %s" % (data["user"]["first_name"], data["user"]["last_name"])
@@ -60,7 +60,7 @@ class Message:
     self.profile_url = "http://%s.jaiku.com" % data["user"]["nick"]
     if "icon" in data and data["icon"] != "": self.icon = data["icon"]
     self.can_thread = True
-    self.is_reply = re.compile("@%s[\W]+|@%s$" % (self.username, self.username)).search(self.text) or \
+    self.is_reply = (re.compile("@%s[\W]+|@%s$" % (self.username, self.username)).search(self.text) != None) or \
       (urlparse.urlparse(self.url)[1].split(".")[0].strip() == self.username and \
         self.sender_nick != self.username)
 
@@ -111,7 +111,7 @@ class Client:
         urllib.urlencode({"user": self.account["username"],
           "personal_key":self.account["private:password"]}))).read())
 
-  def get_thread(self, msg):
+  def thread(self, msg):
     thread_content = self.get_thread_data(msg)
     yield Message(self, thread_content)
     for data in thread_content["comments"]:

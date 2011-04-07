@@ -1,0 +1,82 @@
+#!/usr/bin/env python
+#
+# Copyright (C) 2011 Canonical Ltd
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 2 as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Copyright (C) 2010 Ken VanDine <ken.vandine@canonical.com>
+#
+# A cli client for Gwibber
+#
+
+
+######################################################################
+# Setup path
+from os.path import join, dirname, exists, realpath, abspath
+import sys
+import subprocess
+
+LAUNCH_DIR = abspath(sys.path[0])
+SOURCE_DIR = join(LAUNCH_DIR, "..", "gwibber")
+
+# If we were invoked from a Gwibber source directory add that as the
+# preferred module path ...
+if exists(join(SOURCE_DIR, "client.py")):
+    sys.path.insert(0, realpath(dirname(SOURCE_DIR)))
+    try:
+        from gwibber.microblog.util import log
+        log.logger.name = "Gwibber Client"
+        log.logger.info("Running from the source tree")
+        from gwibber import client
+    finally:
+        del sys.path[0]
+else:
+    from gwibber.microblog.util import log
+    log.logger.name = "Gwibber Client"
+    log.logger.info("Running from the system path")
+    from gwibber import client
+######################################################################
+
+import gwibber.microblog.util
+import gettext
+from gettext import lgettext as _
+
+######################################################################
+# Options 
+from optparse import OptionParser
+parser = OptionParser()
+parser.add_option("-r", "--refresh", action="store_true",
+                  dest="refresh", 
+                  help=_("Refresh operation in the Gwibber Service"))
+parser.add_option("-q", "--quit", action="store_true",
+                  dest="quit", 
+                  help=_("Shutdown the Gwibber Service"))
+parser.add_option("-m", "--message", dest="message",
+                  help=_("Message to post"))
+(options, args) = parser.parse_args()
+######################################################################
+
+service = gwibber.microblog.util.getbus("Service")
+
+if options.refresh:
+  service.Refresh()
+  sys.exit()
+
+if options.quit:
+  service.Quit()
+  subprocess.call(["pkill", "gwibber"])
+  sys.exit()
+  
+if options.message:
+  service.SendMessage(message)
+  sys.exit()

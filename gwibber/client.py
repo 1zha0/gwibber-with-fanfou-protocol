@@ -1,494 +1,259 @@
-"""
+#!/usr/bin/env python
 
-Gwibber Client v1.0
-SegPhault (Ryan Paul) - 01/05/2008
+import gtk, gobject, gwui, util, actions, json, gconf
+import subprocess, os, time, datetime
+from microblog import config
+import microblog.util
+from microblog.util import resources
 
-"""
-
-import time, os, threading, logging, mx.DateTime, hashlib
-from . import table
-import gtk, gtk.glade, gobject, functools, traceback
-import microblog
-from . import gwui, config, gintegration, configui, resources
-import xdg.BaseDirectory, urllib2, urlparse
-import webbrowser
-import actions
-from . import urlshorter
-
-# Setup Pidgin
-from . import pidgin
-microblog.PROTOCOLS["pidgin"] = pidgin
-
-# i18n magic
 import gettext
-import locale
+from gettext import lgettext as _
+if hasattr(gettext, 'bind_textdomain_codeset'):
+    gettext.bind_textdomain_codeset('gwibber','UTF-8')
+gettext.textdomain('gwibber')
 
-# urllib (quoting urls)
-import urllib
-
-# Set this way as in setup.cfg we have prefix=/usr/local
-LOCALEDIR = "/usr/share/locale"
-DOMAIN = "gwibber"
-
-locale.setlocale(locale.LC_ALL, "")
-
-for module in gtk.glade, gettext:
-  module.bindtextdomain(DOMAIN, LOCALEDIR)
-  module.textdomain(DOMAIN)
-
-_ = gettext.lgettext
-
-gtk.gdk.threads_init()
-
-MAX_MESSAGE_LENGTH = 140
-
-VERSION_NUMBER = "1.2.0"
-
-def N_(message): return message
-
-CONFIGURABLE_UI_ELEMENTS = {
-  "editor": N_("_Editor"),
-  "statusbar": N_("_Statusbar"),
-  "tray_icon": N_("Tray _Icon"),
-  "public_view": N_("_Public Timeline"),
-}
-
-CONFIGURABLE_ACCOUNT_ACTIONS = {
-  # Translators: these are checkbox
-  "receive": N_("_Receive Messages"),
-  "send": N_("_Send Messages"),
-  "search": N_("Search _Messages"),
-  "public": N_("_Public Timeline")
-  }
-
-DEFAULT_PREFERENCES = {
-  "version": VERSION_NUMBER,
-  "show_notifications": True,
-  "refresh_interval": 2,
-  "minimize_to_tray": False,
-  "hide_taskbar_entry": False,
-  "spellcheck_enabled": True,
-  "theme": "gwilouche",
-  "urlshorter": "is.gd",
-  "retweet_style_via": False,
-  "global_retweet": False,
-  "override_font_options": False,
-  "default_font": "Sans 14",
-  "show_fullname_in_messages": True,
-}
-
-for _i in list(CONFIGURABLE_UI_ELEMENTS.keys()):
-  if _i == "public_view":
-    DEFAULT_PREFERENCES["show_%s" % _i] = True
-  else:
-    DEFAULT_PREFERENCES["show_%s" % _i] = False
+from gwibber.microblog.util import log
+from microblog.util.const import *
+# Try to import * from custom, install custom.py to include packaging 
+# customizations like distro API keys, etc
+try:
+  from microblog.util.custom import *
+except:
+  pass
 
 try:
-  import indicate
-  import wnck
+  import appindicator
 except:
-  indicate = None
+  appindicator = None
+
+from dbus.mainloop.glib import DBusGMainLoop
+import dbus, dbus.service
+
+DBusGMainLoop(set_as_default=True)
 
 class GwibberClient(gtk.Window):
   def __init__(self):
+    gtk.Window.__init__(self)
+    self.ui = gtk.Builder()
+    self.ui.set_translation_domain ("gwibber")
 
-    self.dbus = gintegration.DBusManager(self)
+    self.model = gwui.Model()
 
-    gtk.Window.__init__(self, gtk.WINDOW_TOPLEVEL)
-    self.set_title(_("Gwibber"))
-    self.set_default_size(330, 500)
-    config.GCONF.add_dir(config.GCONF_PREFERENCES_DIR, config.gconf.CLIENT_PRELOAD_NONE)
-    self.preferences = config.Preferences()
-    self.last_update = None
-    self.last_focus_time = None
-    self.last_clear = None
-    self._reply_acct = None
-    self.indicator_items = {}
-    layout = gtk.VBox()
+    self.service = self.model.daemon
+    self.messages = self.model.messages
+    self.service.connect_to_signal("LoadingStarted", self.on_loading_started)
+    self.service.connect_to_signal("LoadingComplete", self.on_loading_complete)
+    self.service.connect_to_signal("IndicatorInterestAdded", self.on_indicator_interest_added)
+    self.service.connect_to_signal("IndicatorInterestRemoved", self.on_indicator_interest_removed)
 
-    if self.preferences["facebook_beta"]:
-      from microblog import facebookstream
-      microblog.PROTOCOLS["facebook"] = facebookstream
+    self.messages.connect_to_signal("Message", self.on_new_message)
 
-    gtk.rc_parse_string("""
-    style "tab-close-button-style" {
-      GtkWidget::focus-padding = 0
-      GtkWidget::focus-line-width = 0
-      xthickness = 0
-      ythickness = 0
-     }
-     widget "*.tab-close-button" style "tab-close-button-style"
-     """)
+    self.connection = microblog.util.getbus("Connection")
+    self.connection.connect_to_signal("ConnectionOnline", self.on_connection_online)
+    self.connection.connect_to_signal("ConnectionOffline", self.on_connection_offline)
 
-    self.accounts = configui.AccountManager()
-    self.client = microblog.Client(self.accounts)
-    self.client.handle_error = self.handle_error
-    self.client.post_process_message = self.post_process_message
+    self.accounts = microblog.util.getbus("Accounts")
+    self.quicklist_messages = {}
 
-    self.notification_bubbles = {}
-    self.message_target = None
+    first_run = False
+    # check for existing accounts
+    if len(json.loads(self.accounts.List())) == 0:
+      # if there are no accounts configured, prompt the user to add some
+      first_run = True
+      if os.path.exists(os.path.join("bin", "gwibber-accounts")):
+        cmd = os.path.join("bin", "gwibber-accounts")
+      else:
+        cmd = "gwibber-accounts"
+      ret = 1
+      while ret != 0:
+        ret = subprocess.call([cmd])
 
-    self.errors = table.generate([
-      ["date", lambda t: t.time.strftime("%x")],
-      ["time", lambda t: t.time.strftime("%X")],
-      ["username"],
-      ["protocol"],
-      ["message", (gtk.CellRendererText(), {
-        "markup": lambda t: t.message})]
-    ])
+    self.setup_ui()
 
+    if first_run:
+      # Since we didn't have accounts configured when gwibber-service started
+      # force it to refresh now that accounts have been added
+      self.service.Refresh()
+
+    # Migrate the autostart gconf key to the new location
+    if config.GCONF.get("/apps/gwibber/autostart"):
+      config.GCONF.set_bool("/apps/gwibber/preferences/autostart", True)
+      config.GCONF.unset('/apps/gwibber/autostart')
+
+    config.GCONF.add_dir("/desktop/gnome/interface/document_font_name", gconf.CLIENT_PRELOAD_NONE)
+    config.GCONF.notify_add("/desktop/gnome/interface/document_font_name", self.on_font_changed)
+    config.GCONF.add_dir("/desktop/gnome/font_rendering", gconf.CLIENT_PRELOAD_NONE)
+    config.GCONF.notify_add("/desktop/gnome/font_rendering", self.on_font_changed)
+    config.GCONF.add_dir("/apps/gwibber/preferences", gconf.CLIENT_PRELOAD_NONE)
+
+    for x in ["hide_taskbar_entry", "show_tray_icon"]:
+      self.model.settings.notify(x, self.on_setting_changed)
+
+    # Only use the notification area icon if there is no interest from the 
+    # messaging menu indicator
+    if self.service.IndicatorInterestCheck():
+      self.tray_icon.set_visible(False)
+    else:
+      self.tray_icon.set_visible(self.model.settings["show_tray_icon"])
+
+    self.set_property("skip-taskbar-hint", self.model.settings["hide_taskbar_entry"])
+
+
+    # set state online/offline
+    if not self.connection.isConnected():
+      log.logger.info("Setting to Offline")
+      self.actions.get_action("refresh").set_sensitive(False)
+
+    # Delay resizing input area or else it doesn't work
+    gobject.idle_add(lambda: self.input_splitter.set_position(int(self.model.settings["window_splitter"])))
+
+    # Delay resizing the sidebar area or else it doesn't work
+    gobject.idle_add(lambda: hasattr(self.stream_view, "splitter") and self.stream_view.splitter.set_position(self.model.settings["sidebar_splitter"]))
+
+    # Apply the user's settings 
+    gobject.idle_add(lambda: self.resize(*self.model.settings["window_size"]))
+    gobject.idle_add(lambda: self.move(*self.model.settings["window_position"]))
+
+    self.connect("configure-event", self.on_configure_event)
+
+  def on_configure_event(self, *args):
+    self.save_window_settings()
+
+  def on_new_message(self, change,  message):
+    message = json.loads(message)
+    if appindicator:
+      if message["stream"] == "messages":
+        if not message["sender"]["is_me"]:
+          if not message["sender"].has_key("name"): return
+          if self.quicklist_messages.has_key(message["sender"]["name"]):
+            count = self.quicklist_messages[message["sender"]["name"]]["count"] + 1
+            msg = "%s (%s)" % (message["sender"]["name"], count)
+            self.quicklist_messages[message["sender"]["name"]]["count"] = count
+            self.quicklist_messages[message["sender"]["name"]]["menu"].set_label(msg)
+            self.quicklist_messages[message["sender"]["name"]]["menu"].show()
+          else:
+            msg = "%s" % message["sender"]["name"]
+            ai_entry = gtk.MenuItem(msg)
+            ai_entry.connect("activate", lambda *a: self.present_with_time(int(time.mktime(datetime.datetime.now().timetuple()))))
+            self.quicklist_messages[message["sender"]["name"]] = {"count": 1, "menu": ai_entry}
+            self.ai_menu.prepend(ai_entry)
+            ai_entry.show()
+          while len(self.quicklist_messages) >= 7:
+            self.quicklist_messages.values()[-1]["menu"].destroy()
+            self.quicklist_messages.pop(self.quicklist_messages.keys()[-1])
+
+  def on_indicator_interest_added(self):
+    # Hide the notification area icon if there is interest from the 
+    # messaging menu indicator
+    self.tray_icon.set_visible(False)
+
+  def on_indicator_interest_removed(self):
+    # Show the notification area icon if there is no interest from the 
+    # messaging menu indicator
+    self.tray_icon.set_visible(True)
+
+  def on_setting_changed(self, gc, x, pref, y):
+    if "show_tray_icon" in pref.key:
+      self.tray_icon.set_visible(pref.value.get_bool())
+
+    if "hide_taskbar_entry" in pref.key:
+      self.set_property("skip-taskbar-hint", pref.value.get_bool())
+
+  def on_font_changed(self, *args):
+    self.update_view()
+
+  def setup_ui(self):
+    self.set_title(_("Social broadcast messages"))
+    self.set_icon_from_file(resources.get_ui_asset("gwibber.svg"))
     self.connect("delete-event", self.on_window_close)
-    self.connect("focus-out-event", self.on_focus_out)
-    self.connect("focus-in-event", self.on_focus)
 
-    for key, value in list(DEFAULT_PREFERENCES.items()):
-      if self.preferences[key] == None: self.preferences[key] = value
+    # Load the application menu
+    menu_ui = self.setup_menu()
+    self.add_accel_group(menu_ui.get_accel_group())
 
-    if not resources.get_theme_path(self.preferences["theme"]):
-      self.preferences["theme"] = DEFAULT_PREFERENCES["theme"]
+    def on_tray_menu_popup(i, b, a):
+      menu_ui.get_widget("/menu_tray").popup(None, None,
+          gtk.status_icon_position_menu, b, a, self.tray_icon)
 
-    self.preferences["version"] = VERSION_NUMBER
-
-    self.timer = gobject.timeout_add(60000 * int(self.preferences["refresh_interval"]), self.update)
-    self.preferences.notify("refresh_interval", self.on_refresh_interval_changed)
-
-    for p in [
-        "theme",
-        "default_font",
-        "override_font_options",
-        "show_fullname_in_messages"]:
-      self.preferences.notify(p, self.on_theme_change)
-
-    gtk.icon_theme_add_builtin_icon("gwibber", 22,
-      gtk.gdk.pixbuf_new_from_file_at_size(
-        resources.get_ui_asset("gwibber.svg"), 24, 24))
-
-    self.set_icon_name("gwibber")
-    self.tray_icon = gtk.status_icon_new_from_icon_name("gwibber")
+    self.tray_icon = gtk.status_icon_new_from_file(resources.get_ui_asset("gwibber.svg"))
     self.tray_icon.connect("activate", self.on_toggle_window_visibility)
+    self.tray_icon.connect("popup-menu", on_tray_menu_popup)
 
-    self.tabs = gtk.Notebook()
-    self.tabs.set_property("homogeneous", False)
-    self.tabs.set_scrollable(True)
-    self.messages_view = self.add_msg_tab(self.client.receive, _("Messages"), show_icon = "go-home")
-    self.add_msg_tab(self.client.responses, _("Replies"), show_icon = "mail-reply-all", add_indicator=True)
-    self.public_view = self.add_msg_tab(self.client.public_timeline, _("Public"), show_icon = "language-selector", add_indicator=True, can_toggle=True, show_notifications=False)
+    # Create animated loading spinner
+    self.loading_spinner = gtk.Image()
+    menu_spin = gtk.ImageMenuItem("")
+    menu_spin.set_right_justified(True)
+    menu_spin.set_sensitive(False)
+    menu_spin.set_image(self.loading_spinner)
 
-    saved_position = config.GCONF.get_list("%s/%s" % (config.GCONF_PREFERENCES_DIR, "saved_position"), config.gconf.VALUE_INT)
-    if saved_position:
-      self.move(*saved_position)
+    # Force the spinner to show in newer versions of Gtk
+    if hasattr(menu_spin, "set_always_show_image"):
+      menu_spin.set_always_show_image(True)
 
-    saved_size = config.GCONF.get_list("%s/%s" % (config.GCONF_PREFERENCES_DIR, "saved_size"), config.gconf.VALUE_INT)
-    if saved_size:
-      self.resize(*saved_size)
+    menubar = menu_ui.get_widget("/menubar_main")
+    menubar.append(menu_spin)
 
-    saved_queries = config.GCONF.get_list("%s/%s" % (config.GCONF_PREFERENCES_DIR, "saved_searches"),
-      config.gconf.VALUE_STRING)
-
-    if saved_queries:
-      for query in saved_queries:
-        # XXX: suggest refactor of below code to avoid duplication of on_search code
-        if query.startswith("#"):
-          self.add_msg_tab(functools.partial(self.client.tag, query),
-            query.replace("#", ""), True, gtk.STOCK_INFO, False, query)
-        elif microblog.support.LINK_PARSE.match(query):
-          self.add_msg_tab(functools.partial(self.client.search_url, query),
-            urlparse.urlparse(query)[1], True, gtk.STOCK_FIND, True, query)
-        elif len(query) > 0:
-          title = _("Search") + " '" + query[:12] + "...'"
-          self.add_msg_tab(functools.partial(self.client.search, query),
-            title, True, gtk.STOCK_FIND, False, query)
-
-    #self.add_map_tab(self.client.friend_positions, "Location")
-
-    if gintegration.SPELLCHECK_ENABLED:
-      self.input = gintegration.sexy.SpellEntry()
-      self.input.set_checked(self.preferences["spellcheck_enabled"])
-    else: self.input = gtk.Entry()
-    self.input.connect("insert-text", self.on_add_text)
-    self.input.connect("populate-popup", self.on_input_context_menu)
-    self.input.connect("activate", self.on_input_activate)
-    self.input.connect("changed", self.on_input_change)
-    self.input.set_max_length(MAX_MESSAGE_LENGTH)
-
-    self.cancel_button = gtk.Button(_("Cancel"))
-    self.cancel_button.connect("clicked", self.on_cancel_reply)
-
-    self.editor = gtk.HBox()
-    self.editor.pack_start(self.input)
-    self.editor.pack_start(self.cancel_button, False)
-
-    vb = gtk.VBox(spacing=5)
-    vb.pack_start(self.tabs, True, True)
-    vb.pack_start(self.editor, False, False)
-    vb.set_border_width(5)
-
-    warning_icon = gtk.image_new_from_stock(gtk.STOCK_DIALOG_WARNING, gtk.ICON_SIZE_MENU)
-    self.status_icon = gtk.EventBox()
-    self.status_icon.add(warning_icon)
-    self.status_icon.connect("button-press-event", self.on_errors_show)
-
-    self.statusbar = gtk.Statusbar()
-    self.statusbar.pack_start(self.status_icon, False, False)
+    # Load the user's saved streams
+    streams = json.loads(self.model.settings["streams"])
+    streams = [dict((str(k), v) for k, v in s.items()) for s in streams]
     
-    layout.pack_start(self.setup_menus(), False)
-    layout.pack_start(vb, True, True)
-    layout.pack_start(self.statusbar, False)
+    # Use the multicolumn mode if there are multiple saved streams
+    view_class = getattr(gwui, "MultiStreamUi" if len(streams) > 1 else "SingleStreamUi")
+
+    self.stream_view = view_class(self.model)
+    self.stream_view.connect("action", self.on_action)
+    self.stream_view.connect("search", self.on_perform_search)
+    self.stream_view.connect("stream-changed", self.on_stream_changed)
+    self.stream_view.connect("stream-closed", self.on_stream_closed)
+    if isinstance(self.stream_view, gwui.MultiStreamUi):
+      self.stream_view.connect("pane-closed", self.on_pane_closed)
+
+    self.input = gwui.Input()
+    self.input.connect("submit", self.on_input_activate)
+    self.input.connect("changed", self.on_input_changed)
+    self.input.connect("clear", self.on_input_cleared)
+
+    self.input_splitter = gtk.VPaned()
+    self.input_splitter.pack1(self.stream_view, resize=True)
+    self.input_splitter.pack2(self.input, resize=False)
+
+    self.input_splitter.set_focus_child(self.input)
+
+    self.button_send = gtk.Button(_("Send"))
+    self.button_send.connect("clicked", self.on_button_send_clicked)
+
+    self.message_target = gwui.AccountTargetBar(self.model)
+    self.message_target.pack_end(self.button_send, False)
+    self.message_target.connect("canceled", self.on_reply_cancel)
+
+    content = gtk.VBox(spacing=5)
+    content.pack_start(self.input_splitter, True)
+    content.pack_start(self.message_target, False)
+    content.set_border_width(5)
+
+    layout = gtk.VBox()
+    layout.pack_start(menubar, False)
+    layout.pack_start(content, True)
+
     self.add(layout)
 
-    if gintegration.can_notify:
-      # FIXME: Move this to DBusManager
-      import dbus
-
-      # http://galago-project.org/specs/notification/0.9/x408.html#signal-notification-closed
-      def on_notify_close(nId, reason = 1):
-        if nId in self.notification_bubbles:
-          del self.notification_bubbles[nId]
-
-      def on_notify_action(nId, action):
-        if action == "reply":
-          self.reply(self.notification_bubbles[nId])
-          self.window.show()
-          self.present()
-
-      bus = dbus.SessionBus()
-      bus.add_signal_receiver(on_notify_close,
-        dbus_interface="org.freedesktop.Notifications",
-        signal_name="NotificationClosed")
-
-      bus.add_signal_receiver(on_notify_action,
-        dbus_interface="org.freedesktop.Notifications",
-        signal_name="ActionInvoked")
-
-    if indicate:
-      self.indicate = indicate.indicate_server_ref_default()
-      self.indicate.set_type("message.gwibber")
-      self.indicate.set_desktop_file(resources.get_desktop_file())
-      self.indicate.connect("server-display", self.on_toggle_window_visibility)
-      self.indicate.show()
-
-    for i in list(CONFIGURABLE_UI_ELEMENTS.keys()):
-      config.GCONF.notify_add(config.GCONF_PREFERENCES_DIR + "/show_%s" % i,
-        lambda *a: self.apply_ui_element_settings())
-
-    config.GCONF.notify_add("/apps/gwibber/accounts", self.on_account_change)
-
-    self.preferences.notify("hide_taskbar_entry",
-      lambda *a: self.apply_ui_element_settings())
-
-    self.preferences.notify("spellcheck_enabled",
-      lambda *a: self.apply_ui_element_settings())
-
-    #for i in CONFIGURABLE_UI_SETTINGS:
-    #  config.GCONF.notify_add(config.GCONF_PREFERENCES_DIR + "/%s" % i,
-    #    lambda *a: self.apply_ui_drawing_settings())
-
-    def on_key_press(w, e):
-      if e.keyval == gtk.keysyms.F5:
-        self.update()
-        return True
-      if e.keyval == gtk.keysyms.Tab and e.state & gtk.gdk.CONTROL_MASK:
-        if len(self.tabs) == self.tabs.get_current_page() + 1:
-          self.tabs.set_current_page(0)
-        else: self.tabs.next_page()
-        return True
-      elif e.keyval in [ord(str(x)) for x in range(10)] and e.state & gtk.gdk.MOD1_MASK:
-        self.tabs.set_current_page(int(gtk.gdk.keyval_name(e.keyval))-1)
-        return True
-      elif e.keyval == gtk.keysyms.T and e.state & gtk.gdk.CONTROL_MASK:
-        self.on_theme_change()
-        return True
-      else:
-        return False
-
-      #else:
-      #  if not self.input.is_focus():
-      #    self.input.grab_focus()
-      #    self.input.set_position(-1)
-      #  return False
-
-    self.connect("key_press_event", on_key_press)
-
+    # Apply the user's settings 
+    self.resize(*self.model.settings["window_size"])
+    self.move(*self.model.settings["window_position"])
+    self.input_splitter.set_position(self.model.settings["window_splitter"])
+    
+    if hasattr(self.stream_view, "splitter"):
+      self.stream_view.splitter.set_position(
+          self.model.settings["sidebar_splitter"])
+    
     self.show_all()
-    self.apply_ui_element_settings()
-    self.cancel_button.hide()
-    self.status_icon.hide()
-    self.on_theme_change()
 
-    if not self.preferences["inhibit_startup_refresh"]:
-      self.update()
+    self.stream_view.set_state(streams)
+    self.update_menu_availability()
+    for stream in streams:
+      if stream["stream"]:
+        gobject.idle_add(lambda: self.service.UpdateIndicators(stream["stream"]))
 
-  def on_add_text(self, entry, text, txtlen, pos):
-    if self.preferences["shorten_urls"]:
-      if text and text.startswith("http") and not " " in text \
-          and len(text) > 20:
-        # verify url is not already shortened
-        for us in urlshorter.PROTOCOLS.keys():
-          if text.startswith(urlshorter.PROTOCOLS[us].PROTOCOL_INFO["fqdn"]):
-            return
-        if text.startswith('http://twitpic.com'):
-          return
-
-        entry.stop_emission("insert-text")
-        try:
-          if not self.preferences["urlshorter"]:
-            self.preferences["urlshorter"] = "is.gd"
-          self.urlshorter = urlshorter.PROTOCOLS[self.preferences["urlshorter"]].URLShorter()
-          short = self.urlshorter.short(text)
-        except:
-          # Translators: this message appears in the Errors dialog
-          # Indicates with which action the error happened
-          self.handle_error({"username": "None", "protocol": urlshorter.PROTOCOLS[self.preferences["urlshorter"]].PROTOCOL_INFO["name"]},
-            traceback.format_exc(), _("Failed to shorten URL"))
-          self.preferences["shorten_urls"] = False
-          self.add_url(entry, text)
-          self.preferences["shorten_urls"] = True
-        else:
-          self.add_url(entry, short)
-
-  def add_url(self, entry, text):
-    # check if current text is longer than MAX_MESSAGE_LENGTH
-    c_text_len=(len(unicode(entry.get_text(), "utf-8")) + len(text))
-    # if so increase input.max_length and allow insertion
-    if c_text_len > MAX_MESSAGE_LENGTH:
-       self.input.set_max_length(c_text_len)
-    entry.insert_text(text, entry.get_position())
-    gobject.idle_add(lambda: entry.set_position(entry.get_position() + len(text)))
-
-  def on_focus(self, w, change):
-    for key, item in self.indicator_items.items():
-      #self.indicate.remove_indicator(item)
-      item.hide()
-    self.indicator_items = {}
-
-  def on_focus_out(self, widget, event):
-    if self.last_update:
-      self.last_focus_time = self.last_update
-    else:
-      self.last_focus_time= mx.DateTime.gmt()
-    return True
-
-  def on_search(self, *a):
-    dialog = gtk.MessageDialog(None,
-      gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_QUESTION,
-      gtk.BUTTONS_OK_CANCEL, None)
-
-    entry = gtk.Entry()
-    entry.connect("activate", lambda *a: dialog.response(gtk.RESPONSE_OK))
-
-    dialog.set_markup(_("Enter a search query:"))
-    dialog.vbox.pack_end(entry, True, True, 0)
-    dialog.show_all()
-    ret = dialog.run()
-    dialog.hide()
-
-    if ret == gtk.RESPONSE_OK:
-      query = entry.get_text()
-      view = None
-      if query.startswith("#"):
-        view = self.add_msg_tab(functools.partial(self.client.tag, query),
-          query.replace("#", ""), True, gtk.STOCK_INFO, True, query)
-      elif microblog.support.LINK_PARSE.match(query):
-        view = self.add_msg_tab(functools.partial(self.client.search_url, query),
-          urlparse.urlparse(query)[1], True, gtk.STOCK_FIND, True, query)
-      elif len(query) > 0:
-        title = _("Search") + " '" + query[:12] + "...'"
-        view = self.add_msg_tab(functools.partial(self.client.search, query),
-          title, True, gtk.STOCK_FIND, True, query)
-
-      if view:
-        self.update([view.get_parent()])
-
-  def add_scrolled_parent(self, view, text, show_close=False, show_icon=None, make_active=False, save=None, can_toggle=False, show_notifications=True):
-    scroll = gtk.ScrolledWindow()
-    scroll.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
-    scroll.show_notifications = show_notifications
-    # Tabs that can be toggled (like public timeline) should be excluded from the parent show_all() - they will maintain their own state
-    scroll.set_no_show_all(can_toggle)
-    scroll.add(view)
-    scroll.saved_query = save
-    view.scroll = scroll
-
-    img = gtk.image_new_from_stock(gtk.STOCK_CLOSE, gtk.ICON_SIZE_MENU)
-
-    btn = gtk.Button()
-    btn.set_image(img)
-    btn.set_relief(gtk.RELIEF_NONE)
-    btn.set_name("tab-close-button")
-
-    hb = gtk.HBox(spacing=2)
-    if show_icon:
-      hb.pack_start(gtk.image_new_from_icon_name(show_icon, gtk.ICON_SIZE_MENU))
-    hb.pack_start(gtk.Label(text))
-    if show_close: hb.pack_end(btn, False, False)
-    hb.show_all()
-
-    self.tabs.append_page(scroll, hb)
-    self.tabs.set_tab_reorderable(scroll, True)
-    self.tabs.show_all()
-    if make_active: self.tabs.set_current_page(self.tabs.page_num(scroll))
-
-    btn.connect("clicked", self.on_tab_close, scroll)
-    self.on_theme_change()
-
-  def add_msg_tab(self, data_handler, text, show_close=False, show_icon=None, make_active=False, save=None, add_indicator=False, can_toggle=False, show_notifications=True):
-    view = gwui.MessageView(self.preferences["theme"], self)
-    view.link_handler = self.on_link_clicked
-    view.data_retrieval_handler = data_handler
-    view.add_indicator = add_indicator
-
-    self.add_scrolled_parent(view, text, show_close, show_icon, make_active, save, can_toggle, show_notifications)
-    return view
-
-  def add_user_tab(self, data_handler, text, show_close=False, show_icon=None, make_active=False, save=None):
-    view = gwui.UserView(self.preferences["theme"], self)
-    view.link_handler = self.on_link_clicked
-    view.data_retrieval_handler = data_handler
-    view.add_indicator = False
-
-    self.add_scrolled_parent(view, text, show_close, show_icon, make_active, save)
-    return view
-
-  def add_map_tab(self, data_handler, text, show_close = True, show_icon = "applications-internet"):
-    view = gwui.MapView()
-    view.link_handler = self.on_link_clicked
-    view.data_retrieval_handler = data_handler
-    view.add_indicator = False
-
-    self.add_scrolled_parent(view, text, show_close, show_icon, make_active, save)
-    return view
-
-  def on_tab_close(self, w, e):
-    pagenum = self.tabs.page_num(e)
-    self.tabs.remove_page(pagenum)
-    e.destroy()
-
-  def on_tab_close_btn(self, w, *args):
-    n = self.tabs.get_current_page()
-    if (n > 1):
-      self.on_tab_close(w, self.tabs.get_nth_page(n))
-
-  def on_account_change(self, client, junk, entry, *args):
-    if "color" in entry.get_key():
-      for tab in self.tabs.get_children():
-        view = tab.get_child()
-        view.load_messages()
-
-  def on_window_close(self, w, e):
-    if self.preferences["minimize_to_tray"]:
-      self.preferences["show_tray_icon"] = True
-      self.on_toggle_window_visibility(w)
-      return True
-    else: self.on_quit()
-
-  def on_window_close_btn(self, w, *args):
-    self.on_window_close(w, None)
-
-  def on_cancel_reply(self, w, *args):
-    self.cancel_button.hide()
-    self.message_target = None
-    self._reply_acct = None
-    self.input.set_text("")
 
   def on_toggle_window_visibility(self, w):
     if self.get_property("visible"):
@@ -498,667 +263,397 @@ class GwibberClient(gtk.Window):
       self.present()
       self.move(*self.last_position)
 
-  def on_indicator_activate(self, w):
-    tab_num = w.get_property("gwibber_tab")
-    if tab_num is not None:
-      self.tabs.set_current_page(int(tab_num))
-    visible = self.get_property("visible")
-    self.present()
-    if not visible:
-      self.move(*self.last_position)
+  def set_view(self, view=None):
+    state = None
+    if view: self.view_class = getattr(gwui, view)
+    if self.stream_view:
+      state = self.stream_view.get_state()
+      self.stream_view.destroy()
 
-  def external_invoke(self):
-    logging.info("Invoked by external")
-    if not self.get_property("visible"):
-      logging.debug("Not visible..")
-      self.present()
-      self.move(*self.last_position)
+    self.stream_view = self.view_class(self.model)
+    self.stream_view.connect("action", self.on_action)
+    self.stream_view.connect("search", self.on_perform_search)
+    self.stream_view.connect("stream-changed", self.on_stream_changed)
+    self.stream_view.connect("stream-closed", self.on_stream_closed)
 
-  def apply_ui_element_settings(self):
-    for i in list(CONFIGURABLE_UI_ELEMENTS.keys()):
-      if hasattr(self, i):
-        getattr(self, i).set_property(
-          "visible", self.preferences["show_%s" % i])
-        # If we have a parent, and if that parent has no_show_all=True, we're dealing with a tab which can be toggled, so set the visible property on the parent to hide it properly as required
-        if hasattr(getattr(self, i), "parent") and getattr(self, i).parent.props.no_show_all:
-            getattr(self, i).parent.set_property(
-              "visible", self.preferences["show_%s" % i])
-            # If the tab isn't visible clear messages, better to see no data than stale data upon reveal
-            if not getattr(self, i).parent.props.visible : getattr(self, i).clear()
-      
-    self.set_property("skip-taskbar-hint",
-      self.preferences["hide_taskbar_entry"])
+    if isinstance(self.stream_view, gwui.MultiStreamUi):
+      self.stream_view.connect("pane-closed", self.on_pane_closed)
 
-    if gintegration.SPELLCHECK_ENABLED:
-      self.input.set_checked(self.preferences["spellcheck_enabled"])
+    self.input_splitter.add1(self.stream_view)
+    self.stream_view.show_all()
+    if state: self.stream_view.set_state(state)
 
-  def on_refresh_interval_changed(self, *a):
-    gobject.source_remove(self.timer)
-    self.timer = gobject.timeout_add(
-      60000 * int(self.preferences["refresh_interval"]), self.update)
+  def setup_menu(self):
+    ui_string = """
+    <ui>
+      <menubar name="menubar_main">
+        <menu action="menu_gwibber">
+          <menuitem action="refresh" />
+          <menuitem action="search" />
+          <separator/>
+          <menuitem action="new_stream" />
+          <menuitem action="close_window" />
+          <menuitem action="close_stream" />
+          <separator/>
+          <menuitem action="quit" />
+        </menu>
+
+        <menu action="menu_edit">
+          <menuitem action="accounts" />
+          <menuitem action="preferences" />
+        </menu>
+
+        <menu action="menu_help">
+          <menuitem action="help_online" />
+          <menuitem action="help_translate" />
+          <menuitem action="help_report" />
+          <separator/>
+          <menuitem action="about" />
+        </menu>
+      </menubar>
+
+      <popup name="menu_tray">
+        <menuitem action="refresh" />
+        <separator />
+        <menuitem action="accounts" />
+        <menuitem action="preferences" />
+        <separator />
+        <menuitem action="quit" />
+      </popup>
+    </ui>
+    """
+
+    self.actions = gtk.ActionGroup("Actions")
+    self.actions.add_actions([
+      ("menu_gwibber", None, _("_Gwibber")),
+      ("menu_edit", None, _("_Edit")),
+      ("menu_help", None, _("_Help")),
+
+      ("refresh", gtk.STOCK_REFRESH, _("_Refresh"), "F5", None, self.on_refresh),
+      ("search", gtk.STOCK_FIND, _("_Search"), "<ctrl>F", None, self.on_search),
+      ("accounts", None, _("_Accounts"), "<ctrl><shift>A", None, self.on_accounts),
+      ("preferences", gtk.STOCK_PREFERENCES, _("_Preferences"), "<ctrl>P", None, self.on_preferences),
+      ("about", gtk.STOCK_ABOUT, _("_About"), None, None, self.on_about),
+      ("quit", gtk.STOCK_QUIT, _("_Quit"), "<ctrl>Q", None, self.on_quit),
+
+      ("new_stream", gtk.STOCK_NEW, _("_New Stream"), "<ctrl>n", None, self.on_new_stream),
+      ("close_window", gtk.STOCK_CLOSE, _("_Close Window"), "<ctrl><shift>W", None, self.on_window_close),
+      ("close_stream", gtk.STOCK_CLOSE, _("_Close Stream"), "<ctrl>W", None, self.on_close_stream),
+
+      ("help_online", None, _("Get Help Online..."), None, None, lambda *a: util.load_url(QUESTIONS_URL)),
+      ("help_translate", None, _("Translate This Application..."), None, None, lambda *a: util.load_url(TRANSLATE_URL)),
+      ("help_report", None, _("Report A Problem..."), None, None, lambda *a: util.load_url(BUG_URL)),
+    ])
+
+    ui = gtk.UIManager()
+    ui.insert_action_group(self.actions, pos=0)
+    ui.add_ui_from_string(ui_string)
+    
+    # Add the old CTRL+R shortcut for legacy users
+    refresh = ui.get_widget('/menubar_main/menu_gwibber/refresh')
+    key, mod = gtk.accelerator_parse("<ctrl>R")
+    refresh.add_accelerator("activate", ui.get_accel_group(), key, mod, gtk.ACCEL_VISIBLE)
+
+    if appindicator:
+      # Use appindicators to get quicklists in unity
+      self.ind = appindicator.Indicator ("Gwibber",
+                                    "applications-microblogging-panel",
+                                    appindicator.CATEGORY_APPLICATION_STATUS)
+
+      # create a menu
+      self.ai_menu = gtk.Menu()
+
+      self.ai_menu.append(gtk.SeparatorMenuItem())
+      ai_refresh = gtk.MenuItem(_("_Refresh"))
+      ai_refresh.connect("activate", self.on_refresh)
+      self.ai_menu.append(ai_refresh)
+
+      ai_accounts = gtk.MenuItem(_("_Accounts"))
+      ai_accounts.connect("activate", self.on_accounts)
+      self.ai_menu.append(ai_accounts)
+
+      ai_preferences = gtk.MenuItem(_("_Preferences"))
+      ai_preferences.connect("activate", self.on_preferences)
+      self.ai_menu.append(ai_preferences)
+
+      # show the items
+      self.ai_menu.show_all()
+
+      self.ind.set_menu(self.ai_menu)
+
+      # End use appindicators to get quicklists in unity
+
+    return ui
+
+  def update_menu_availability(self):
+    state = self.stream_view.get_state()
+    if state:
+      a = self.actions.get_action("close_stream")
+      a.set_visible(bool(state[0].get("transient", False)))
+
+  def update_view(self):
+    self.stream_view.update()
+
+  def private(self, message):
+    features = self.model.services[message["service"]]["features"]
+
+    if "private" in features:
+      self.message_target.set_target(message, "private")
+      self.input.textview.grab_focus()
+      buf = self.input.textview.get_buffer()
+      buf.place_cursor(buf.get_end_iter())
 
   def reply(self, message):
-    acct = message.account
-    # store which account we replied to first so we know when not to allow further replies
-    if not self._reply_acct:
-        self._reply_acct = acct
-    if acct.supports(microblog.can.REPLY) and acct==self._reply_acct:
-      self.input.grab_focus()
-      if hasattr(message, 'is_private') and message.is_private:
-        self.input.set_text("d %s " % (message.sender_nick))
-      else:
-        # Allow replying to more than one person by clicking on the reply button.
-        current_text = self.input.get_text()
-        # If the current text ends with ": ", strip the ":", it's only taking up space
-        text = current_text[:-2] + " " if current_text.endswith(": ") else current_text
-        # do not add the nick if it's already in the list
-        if not text.count("@%s" % message.sender_nick):
-          self.input.set_text("%s@%s%s" % (text, message.sender_nick, self.preferences['reply_append_colon'] and ': ' or ' '))
+    features = self.model.services[message["service"]]["features"]
 
-      self.input.set_position(-1)
-      self.message_target = message
-      self.cancel_button.show()
+    if "reply" in features:
+      if message["sender"].get("nick", 0) and not "thread" in features:
+        s = "@%s: " if self.model.settings["reply_append_colon"] else "@%s "
+        self.input.set_text(s % message["sender"]["nick"])
 
-    """
-    if acct["protocol"] in microblog.PROTOCOLS.keys():
-      if hasattr(message.client, "can_reply"):
-        view = self.add_msg_tab(lambda: self.client.thread(message), "Jaiku Replies", True)
-        view.load_messages()
-        view.load_preferences(self.get_account_config())
-    """
+      self.message_target.set_target(message)
+      self.input.textview.grab_focus()
+      buf = self.input.textview.get_buffer()
+      buf.place_cursor(buf.get_end_iter())
 
-  def on_message_action_menu(self, msg):
+  def on_reply_cancel(self, widget):
+    self.input.clear()
+
+  def get_message(self, id):
+    data = self.messages.Get(id)
+    if data: return json.loads(data)
+
+  def on_refresh(self, *args):
+    self.service.Refresh()
+
+  def add_stream(self, data, kind=None):
+    if "operation" in data:
+      stream = str(self.model.features[data["operation"]]["stream"])
+      obj = self.model.streams
+    else:
+      stream = "search"
+      obj = self.model.searches
+
+    id = obj.Create(json.dumps(data))
+    self.model.refresh()
+    self.stream_view.new_stream({
+      "stream": stream,
+      "account": data.get("account", None),
+      "transient": id,
+    })
+
+    self.service.PerformOp('{"id": "%s"}' % id)
+    self.update_menu_availability()
+
+  def save_window_settings(self):
+    self.model.settings["streams"] = json.dumps(self.stream_view.get_state())
+    self.model.settings["window_size"] = self.get_size()
+    self.model.settings["window_position"] = self.get_position()
+    self.model.settings["window_splitter"] = self.input_splitter.get_position()
+    
+    if hasattr(self.stream_view, "splitter"):
+      self.model.settings["sidebar_splitter"] = self.stream_view.splitter.get_position()
+
+  def on_pane_closed(self, widget, count):
+    if count < 2 and isinstance(self.stream_view, gwui.MultiStreamUi):
+      self.set_view("SingleStreamUi")
+
+  def on_window_close(self, *args):
+    if self.model.settings["minimize_to_tray"]:
+      self.on_toggle_window_visibility(self)
+      return True
+    else:
+      self.save_window_settings()
+      log.logger.info("Gwibber Client closed")
+      gtk.main_quit()
+
+  def on_quit(self, *args):
+    self.service.Quit()
+    self.save_window_settings()
+    log.logger.info("Gwibber Client quit")
+    gtk.main_quit()
+
+  def on_search(self, *args):
+    self.stream_view.set_state([{
+      "stream": "search",
+      "account": None,
+      "transient": False,
+    }])
+
+    self.stream_view.search_box.focus()
+
+  def on_perform_search(self, widget, query):
+    self.add_stream({"name": query, "query": query})
+
+  def on_accounts(self, *args):
+    if os.path.exists(os.path.join("bin", "gwibber-accounts")):
+      cmd = os.path.join("bin", "gwibber-accounts")
+    else:
+      cmd = "gwibber-accounts"
+    return subprocess.Popen(cmd, shell=False)
+
+  def on_preferences(self, *args):
+    if os.path.exists(os.path.join("bin", "gwibber-preferences")):
+      cmd = os.path.join("bin", "gwibber-preferences")
+    else:
+      cmd = "gwibber-preferences"
+    return subprocess.Popen(cmd, shell=False)
+
+  def on_about(self, *args):
+    self.ui.add_from_file (resources.get_ui_asset("gwibber-about-dialog.ui"))
+    about_dialog = self.ui.get_object("about_dialog")
+    about_dialog.set_version(str(VERSION_NUMBER))
+    about_dialog.set_transient_for(self)
+    about_dialog.connect("response", lambda *a: about_dialog.hide())
+    about_dialog.show_all()
+
+  def on_close_stream(self, *args):
+    state = self.stream_view.get_state()
+    if state and state[0].get("transient", 0):
+      state = state[0]
+      obj = "searches" if state.get("stream", 0) == "search" else "streams"
+      getattr(self.model, obj).Delete(state["transient"])
+      self.stream_view.set_state([{"stream": "messages", "account": None}])
+
+  def on_message_action_menu(self, msg, view):
     theme = gtk.icon_theme_get_default()
     menu = gtk.Menu()
-    
+
+    def perform_action(mi, act, widget, msg): act(widget, self, msg)
+
     for a in actions.MENU_ITEMS:
+      if a.action.__self__.__name__ == "private" and msg["sender"].get("is_me", 0):
+        continue
+
       if a.include(self, msg):
-        mi = gtk.Action("gwibberMessage%s" % a.__name__, a.label, None, None).create_menu_item()
-        mi.get_image().set_from_icon_name(a.icon, gtk.ICON_SIZE_MENU)
-        mi.connect("activate", a.action, self, msg)
+        image = gtk.image_new_from_icon_name(a.icon, gtk.ICON_SIZE_MENU)
+        mi = gtk.ImageMenuItem()
+        mi.set_label(a.label)
+        mi.set_image(image)
+        mi.set_property("use_underline", True)
+        mi.connect("activate", perform_action, a.action, view, msg)
         menu.append(mi)
 
     menu.show_all()
     menu.popup(None, None, None, 3, 0)
-  
-  def on_link_clicked(self, uri, view):
-    if uri.startswith("gwibber:"):
-      if uri.startswith("gwibber:reply"):
-        self.reply(view.message_store[int(uri.split("/")[-1])])
-        return True
-      elif uri.startswith("gwibber:menu"):
-        msg = view.message_store[int(uri.split("/")[-1])]
-        self.on_message_action_menu(msg)
-        return True
-      elif uri.startswith("gwibber:search"):
-        query = uri.split("/")[-1]
-        view = self.add_msg_tab(lambda: self.client.search(query), query, True, gtk.STOCK_FIND, True, query)
-        self.update([view.get_parent()])
-        return True
-      elif uri.startswith("gwibber:tag"):
-        query = uri.split("/")[-1]
-        view = self.add_msg_tab(lambda: self.client.tag(query),
-          query, True, gtk.STOCK_INFO, True, query)
-        self.update([view.get_parent()])
-        return True
-      elif uri.startswith("gwibber:group"):
-        query = uri.split("/")[-1]
-        view = self.add_msg_tab(lambda: self.client.group(query),
-          query, True, gtk.STOCK_INFO, True, query)
-        self.update([view.get_parent()])
-        return True
-      elif uri.startswith("gwibber:thread"):
-        msg = view.message_store[int(uri.split("/")[-1])]
-        if hasattr(msg, "original_title"): tab_label = msg.original_title
-        else: tab_label = msg.text
-        t = self.add_msg_tab(lambda: self.client.thread(msg),
-          microblog.support.truncate(tab_label), True, "mail-reply-all", True)
-        self.update([t.get_parent()])
-        return True
-      elif uri.startswith("gwibber:user"):
-        query = uri.split("/")[-1]
-        account_id = uri.split("/")[-2]
-        view = self.add_user_tab(lambda: self.client.user_messages(query, account_id),
-          query, True, gtk.STOCK_INFO, True)
-        self.update([view.get_parent()])
-        return True
-      elif uri.startswith("gwibber:read"):
-        msg = view.message_store[int(uri.split("/")[-1])]
-        acct = msg.account
-        if acct.supports(microblog.can.READ):
-          if(msg.client.read_message(msg)):
-            self.update([view.get_parent()])
-        else:
-          webbrowser.open (msg.url)
-        return True
-    else: return False
 
-  def on_input_context_menu(self, obj, menu):
-    menu.append(gtk.SeparatorMenuItem())
-    for acct in self.accounts:
-      if acct["protocol"] in list(microblog.PROTOCOLS.keys()):
-        if acct.supports(microblog.can.SEND):
-          mi = gtk.CheckMenuItem("%s (%s)" % (acct["username"],
-            acct.get_protocol().PROTOCOL_INFO["name"]))
-          acct.bind(mi, "send_enabled")
-          menu.append(mi)
-
-    menu.show_all()
-
-  def on_input_change(self, widget):
-    self.statusbar.pop(1)
-    if len(widget.get_text()) > 0:
-      # get current text length
-      i_textlen=len(unicode(widget.get_text(), "utf-8"))
-      # if current text is longer than MAX_MESSAGE_LENGTH
-      if i_textlen > MAX_MESSAGE_LENGTH:
-        # count chars above MAX_MESSAGE_LENGTH
-        chars=i_textlen - MAX_MESSAGE_LENGTH
-        self.statusbar.push(1, _("Characters remaining: %s" % -chars))
-      else:
-        # if current input.max_length if bigger then MAX_MESSAGE_LENGTH
-        # can reset back to MAX_MESSAGE_LENGTH to prevent typing
-        if self.input.get_max_length() > MAX_MESSAGE_LENGTH:
-          self.input.set_max_length(MAX_MESSAGE_LENGTH)
-        self.statusbar.push(1, _("Characters remaining: %s") % (
-        self.input.get_max_length() - i_textlen))
-
-  def on_theme_change(self, *args):
-    for tab in self.tabs:
-      view = tab.get_child()
-      view.load_theme(self.preferences["theme"])
-      if len(view.message_store) > 0:
-        view.load_messages()
-
-  def get_themes(self):
-    for base in xdg.BaseDirectory.xdg_data_dirs:
-      theme_root = os.path.join(base, "gwibber", "ui", "themes")
-      if os.path.exists(theme_root):
-
-        for p in os.listdir(theme_root):
-          if not p.startswith('.'):
-            theme_dir = os.path.join(theme_root, p)
-            if os.path.isdir(theme_dir):
-              yield theme_dir
-
-  def on_accounts_menu(self, amenu):
-    amenu.emit_stop_by_name("select")
-    menu = amenu.get_submenu()
-    for c in menu: menu.remove(c)
-
-    menuAccountsAdd = gtk.MenuItem(_("_Add"))
-    menu.append(menuAccountsAdd)
-
-    menuAccountsManage = gtk.MenuItem(_("_Manage"))
-    menuAccountsManage.connect("activate", lambda *a: self.accounts.show_account_list())
-    menu.append(menuAccountsManage)
-
-    mac = gtk.Menu()
-
-    for p in sorted(microblog.PROTOCOLS.keys()):
-      mi = gtk.MenuItem("%s" % microblog.PROTOCOLS[p].PROTOCOL_INFO["name"])
-      mi.connect("activate", self.accounts.on_account_create, p)
-      mac.append(mi)
-
-    menuAccountsAdd.set_submenu(mac)
-    menu.append(gtk.SeparatorMenuItem())
-
-    for acct in self.accounts:
-      if acct["protocol"] in list(microblog.PROTOCOLS.keys()):
-        sm = gtk.Menu()
-
-        for key in list(CONFIGURABLE_ACCOUNT_ACTIONS.keys()):
-          if acct.supports(getattr(microblog.can, key.upper())):
-            mi = gtk.CheckMenuItem(_(CONFIGURABLE_ACCOUNT_ACTIONS[key]))
-            acct.bind(mi, "%s_enabled" % key)
-            sm.append(mi)
-
-        sm.append(gtk.SeparatorMenuItem())
-
-        mi = gtk.ImageMenuItem(gtk.STOCK_PROPERTIES)
-        mi.connect("activate", lambda w, a: self.accounts.show_properties_dialog(a), acct)
-        sm.append(mi)
-
-        if hasattr(acct.get_protocol(), "account_name"):
-          aname = acct.get_protocol().account_name(acct)
-        elif acct["username"]: aname = acct["username"]
-        else: aname = None
-
-        mi = gtk.MenuItem("%s (%s)" % (aname, acct.get_protocol().PROTOCOL_INFO["name"]))
-        mi.set_submenu(sm)
-        menu.append(mi)
-    menu.show_all()
-    amenu.set_submenu(menu)
-
-  def setup_menus(self):
-    menuGwibber = gtk.Menu()
-    menuView = gtk.Menu()
-    menuAccounts = gtk.Menu()
-    menuHelp = gtk.Menu()
-
-    accelGroup = gtk.AccelGroup()
-    self.add_accel_group(accelGroup)
-
-    key, mod = gtk.accelerator_parse("Escape")
-    accelGroup.connect_group(key, mod, gtk.ACCEL_VISIBLE, self.on_cancel_reply)
-
-    def create_action(name, accel, stock, fn, parent = menuGwibber):
-      mi = gtk.Action("gwibber%s" % name, "%s" % name, None, stock)
-      gtk.accel_map_add_entry("<Gwibber>/%s" % name, *gtk.accelerator_parse(accel))
-      mi.set_accel_group(accelGroup)
-      mi.set_accel_path("<Gwibber>/%s" % name)
-      mi.connect("activate", fn)
-      parent.append(mi.create_menu_item())
-      return mi
-
-    actRefresh = create_action(_("_Refresh"), "<ctrl>R", gtk.STOCK_REFRESH, self.on_refresh)
-    actSearch = create_action(_("_Search"), "<ctrl>F", gtk.STOCK_FIND, self.on_search)
-    # XXX: actCloseWindow should be disabled (greyed out) when false self.preferences['minimize_to_tray'] as it is the same as quitting
-    actCloseWindow = create_action(_("_Close Window"), "<ctrl><shift>W", None, self.on_window_close_btn)
-    actCloseTab = create_action(_("_Close Tab"), "<ctrl>W", gtk.STOCK_CLOSE, self.on_tab_close_btn)
-    menuGwibber.append(gtk.SeparatorMenuItem())
-    actClear = create_action(_("C_lear Window"), "<ctrl><shift>L", gtk.STOCK_CLEAR, self.on_clear)
-    actClearTab = create_action(_("Clear _Tab"), "<ctrl>L", gtk.STOCK_CLEAR, self.on_clear_tab)
-    menuGwibber.append(gtk.SeparatorMenuItem())
-    actPreferences = create_action(_("_Preferences"), "<ctrl>P", gtk.STOCK_PREFERENCES, self.on_preferences)
-    menuGwibber.append(gtk.SeparatorMenuItem())
-    actQuit = create_action(_("_Quit"), "<ctrl>Q", gtk.STOCK_QUIT, self.on_quit)
-
-    #actThemeTest = gtk.Action("gwibberThemeTest", "_Theme Test", None, gtk.STOCK_PREFERENCES)
-    #actThemeTest.connect("activate", self.theme_preview_test)
-    #menuHelp.append(actThemeTest.create_menu_item())
-
-    actHelpOnline = gtk.Action("gwibberHelpOnline", _("Get Help Online..."), None, None)
-    actHelpOnline.connect("activate", lambda *a: gintegration.load_url("https://answers.launchpad.net/gwibber"))
-    actTranslate = gtk.Action("gwibberTranslate", _("Translate This Application..."), None, None)
-    actTranslate.connect("activate", lambda *a: gintegration.load_url("https://translations.launchpad.net/gwibber"))
-    actReportProblem = gtk.Action("gwibberReportProblem", _("Report a Problem"), None, None)
-    actReportProblem.connect("activate", lambda *a: gintegration.load_url("https://bugs.launchpad.net/gwibber/+filebug"))
-    actAbout = gtk.Action("gwibberAbout", _("_About"), None, gtk.STOCK_ABOUT)
-    actAbout.connect("activate", self.on_about)
-
-    menuHelp.append(actHelpOnline.create_menu_item())
-    menuHelp.append(actTranslate.create_menu_item())
-    menuHelp.append(actReportProblem.create_menu_item())
-    menuHelp.append(gtk.SeparatorMenuItem())
-    menuHelp.append(actAbout.create_menu_item())
-
-    for w, n in list(CONFIGURABLE_UI_ELEMENTS.items()):
-      mi = gtk.CheckMenuItem(_(n))
-      self.preferences.bind(mi, "show_%s" % w)
-      menuView.append(mi)
-
-    if gintegration.SPELLCHECK_ENABLED:
-      mi = gtk.CheckMenuItem(_("S_pellcheck"), True)
-      self.preferences.bind(mi, "spellcheck_enabled")
-      menuView.append(mi)
-
-    mi = gtk.MenuItem(_("E_rrors"))
-    mi.connect("activate", self.on_errors_show)
-    menuView.append(gtk.SeparatorMenuItem())
-    menuView.append(mi)
-
-    menuGwibberItem = gtk.MenuItem(_("_Gwibber"))
-    menuGwibberItem.set_submenu(menuGwibber)
-
-    menuViewItem = gtk.MenuItem(_("_View"))
-    menuViewItem.set_submenu(menuView)
-
-    menuAccountsItem = gtk.MenuItem(_("_Accounts"))
-    menuAccountsItem.set_submenu(menuAccounts)
-    menuAccountsItem.connect("select", self.on_accounts_menu)
-
-    menuHelpItem = gtk.MenuItem(_("_Help"))
-    menuHelpItem.set_submenu(menuHelp)
-
-    self.throbber = gtk.Image()
-    menuSpinner = gtk.ImageMenuItem("")
-    menuSpinner.set_right_justified(True)
-    menuSpinner.set_sensitive(False)
-    menuSpinner.set_image(self.throbber)
-
-    actDisplayBubbles = gtk.CheckMenuItem(_("Display bubbles"))
-    self.preferences.bind(actDisplayBubbles, "show_notifications")
-    menuTray = gtk.Menu()
-    menuTray.append(actDisplayBubbles)
-    menuTray.append(actRefresh.create_menu_item())
-    menuTray.append(gtk.SeparatorMenuItem())
-    menuTray.append(actPreferences.create_menu_item())
-    menuTray.append(actAbout.create_menu_item())
-    menuTray.append(gtk.SeparatorMenuItem())
-    menuTray.append(actQuit.create_menu_item())
-    menuTray.show_all()
-
-    self.tray_icon.connect("popup-menu", lambda i, b, a: menuTray.popup(
-      None, None, gtk.status_icon_position_menu, b, a, self.tray_icon))
-
-    menubar = gtk.MenuBar()
-    menubar.append(menuGwibberItem)
-    menubar.append(menuViewItem)
-    menubar.append(menuAccountsItem)
-    menubar.append(menuHelpItem)
-    menubar.append(menuSpinner)
-    return menubar
-
-  def on_quit(self, *a):
-    config.GCONF.set_list("%s/%s" % (config.GCONF_PREFERENCES_DIR, "saved_position"),
-       config.gconf.VALUE_INT, list(self.get_position()))
-    config.GCONF.set_list("%s/%s" % (config.GCONF_PREFERENCES_DIR, "saved_size"),
-       config.gconf.VALUE_INT, list(self.get_size()))
-    config.GCONF.set_list("%s/%s" % (config.GCONF_PREFERENCES_DIR, "saved_searches"),
-      config.gconf.VALUE_STRING, [t.saved_query for t in self.tabs if t.saved_query])
-    gtk.main_quit()
-
-  def on_refresh(self, *a):
-    self.update()
-
-  def on_about(self, mi):
-    glade = gtk.glade.XML(resources.get_ui_asset("preferences.glade"))
-    dialog = glade.get_widget("about_dialog")
-    dialog.set_version(str(VERSION_NUMBER))
-    dialog.connect("response", lambda *a: dialog.hide())
-    dialog.show_all()
-
-  def on_clear(self, mi):
-    self.last_clear = mx.DateTime.gmt()
-    for tab in self.tabs.get_children():
-      view = tab.get_child()
-      view.clear()
-
-  def on_clear_tab(self, mi):
-    self.last_clear = mx.DateTime.gmt()
-    n = self.tabs.get_current_page()
-    view = self.tabs.get_nth_page(n).get_child()
-    view.clear()
-
-  def on_errors_show(self, *args):
-    self.status_icon.hide()
-    errorwin = gtk.Window()
-    errorwin.set_title(_("Errors"))
-    errorwin.set_border_width(10)
-    errorwin.resize(600, 300)
-
-    def on_row_activate(tree, path, col):
-      w = gtk.Window()
-      w.set_title(_("Debug Output"))
-      w.resize(800, 800)
-
-      text = gtk.TextView()
-      text.get_buffer().set_text(tree.get_selected().error)
-
-      scroll = gtk.ScrolledWindow()
-      scroll.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
-      scroll.add_with_viewport(text)
-
-      w.add(scroll)
-      w.show_all()
-
-    errors = table.View(self.errors.tree_style,
-      self.errors.tree_store, self.errors.tree_filter)
-    errors.connect("row-activated", on_row_activate)
-
-    scroll = gtk.ScrolledWindow()
-    scroll.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
-    scroll.add_with_viewport(errors)
-
-    buttons = gtk.HButtonBox()
-    buttons.set_layout(gtk.BUTTONBOX_END)
-
-    def on_click_button(w, stock):
-      if stock == gtk.STOCK_CLOSE:
-        errorwin.destroy()
-      elif stock == gtk.STOCK_CLEAR:
-        self.errors.tree_store.clear()
-
-    for stock in [gtk.STOCK_CLEAR, gtk.STOCK_CLOSE]:
-      b = gtk.Button(stock=stock)
-      b.connect("clicked", on_click_button, stock)
-      buttons.pack_start(b)
-
-    vb = gtk.VBox(spacing=5)
-    vb.pack_start(scroll)
-    vb.pack_start(buttons, False, False)
-
-    errorwin.add(vb)
-    errorwin.show_all()
-
-  def on_preferences(self, mi):
-    # reset theme to default if no longer available
-    if self.preferences['theme'] not in resources.get_themes():
-      config.GCONF.set_string("%s/%s" % (config.GCONF_PREFERENCES_DIR, "theme"), 'default')
-
-    glade = gtk.glade.XML(resources.get_ui_asset("preferences.glade"))
-    dialog = glade.get_widget("pref_dialog")
-    dialog.show_all()
-
-    for widget in [
-        "show_notifications",
-        "refresh_interval",
-        "minimize_to_tray",
-        "hide_taskbar_entry",
-        "shorten_urls",
-        "reply_append_colon",
-        "retweet_style_via",
-        "global_retweet",
-        "show_fullname_in_messages",
-        "override_font_options",
-        "default_font"]:
-      self.preferences.bind(glade.get_widget("pref_%s" % widget), widget)
-
-    def on_toggle_font_override(*a):
-      glade.get_widget("pref_default_font").set_sensitive(self.preferences["override_font_options"])
-    
-    glade.get_widget("pref_override_font_options").connect("toggled", on_toggle_font_override)
-    on_toggle_font_override()
-
-    self.preferences.bind(glade.get_widget("show_tray_icon"), "show_tray_icon")
-
-    theme_selector = gtk.combo_box_new_text()
-    for theme_name in sorted(resources.get_themes()): theme_selector.append_text(theme_name)
-    glade.get_widget("containerThemeSelector").pack_start(theme_selector, True, True)
-    
-    self.preferences.bind(theme_selector, "theme")
-    theme_selector.show_all()
-
-    # add combo box with url shorter services
-    urlshorter_selector = gtk.combo_box_new_text()
-    for us in sorted(urlshorter.PROTOCOLS.keys()):
-      urlshorter_name = urlshorter.PROTOCOLS[us].PROTOCOL_INFO["name"]
-      urlshorter_selector.append_text(urlshorter_name)
-    glade.get_widget("containerURLShorterSelector").pack_start(urlshorter_selector, True, True)
-    self.preferences.bind(urlshorter_selector, "urlshorter")
-    urlshorter_selector.show_all()
-
-    glade.get_widget("button_close").connect("clicked", lambda *a: dialog.destroy())
-
-  def handle_error(self, acct, err, msg = None):
-    self.status_icon.show()
-    self.errors += {
-      "time": mx.DateTime.gmt(),
-      "username": acct["username"],
-      "protocol": acct["protocol"],
-      "message": "%s\n<i><span foreground='red'>%s</span></i>" % (msg, microblog.support.xml_escape(err.split("\n")[-2])),
-      "error": err,
-    }
-
-  def on_input_activate(self, e):
-    text = self.input.get_text().strip()
-    if text:
-      # don't allow submission if text length is greater than allowed
-      if len(text.decode("utf-8")) > MAX_MESSAGE_LENGTH:
-         return
-      # check if reply and target accordingly
-      if self.message_target:
-        account = self.message_target.account
-        if account:
-          # temporarily send_enable the account to allow reply to be posted
-          is_send_enabled = account["send_enabled"]
-          account["send_enabled"] = True
-          if account.supports(microblog.can.THREAD_REPLY) and hasattr(self.message_target, "id"):
-            result = self.client.send_thread(text, self.message_target, [account["protocol"]])
-          else:
-            result = self.client.reply(text, [account["protocol"]])
-          # restore send_enabled choice after replying
-          account["send_enabled"] = is_send_enabled
-      # else standard post
-      else:
-        result = self.client.send(text, list(microblog.PROTOCOLS.keys()))
-
-      # Strip empties out of the result
-      result = [x for x in result if x]
-
-      # if we get returned message info for the posts we should be able
-      # to display them to the user immediately
-      if result:
-        for msg in result:
-          if hasattr(msg, 'text'):
-            self.post_process_message(msg)
-            msg.is_new = msg.is_unread = False
-        self.flag_duplicates(result)
-        self.messages_view.message_store = result + self.messages_view.message_store
-        self.messages_view.load_messages()
-
-      self.on_cancel_reply(None)
-
-  def post_process_message(self, message):
-    if hasattr(message, "image"):
-      message.image_url = message.image
-      message.image_path = gwui.image_cache(message.image_url)
-      message.image = "file://%s" % message.image_path
-
-    def remove_url(s):
-      return ' '.join([x for x in s.strip('.').split()
-        if not x.startswith('http://') and not x.startswith("https://") ])
-
-    if message.text.strip() == "": message.gId = None
-    else: message.gId = hashlib.sha1(remove_url(message.text)[:140]).hexdigest()
-
-    message.aId = message.account.id
-    message.dupes = []
-
-    if self.last_focus_time:
-      message.is_unread = (message.time > self.last_focus_time) or (hasattr(message, "is_unread") and message.is_unread)
-
-    if self.last_update:
-      message.is_new = message.time > self.last_update
-    else: message.is_new = False
-
-    message.time_string = microblog.support.generate_time_string(message.time)
-
-    if not hasattr(message, "html_string"):
-      message.html_string = '<span class="text">%s</span>' % \
-        microblog.support.LINK_PARSE.sub('<a href="\\1">\\1</a>', message.text)
-
-    message.can_reply = message.account.supports(microblog.can.REPLY)
-    return message
-
-  def show_notification_bubbles(self, messages):
-    new_messages = []
-    for message in messages:
-      if message.is_new and self.preferences["show_notifications"] and \
-        message.first_seen and gintegration.can_notify and \
-          message.username != message.sender_nick:
-          new_messages.append(message)
-
-    new_messages.reverse()
-    gtk.gdk.threads_enter()
-    if len(new_messages) > 0:
-        for index, message in enumerate(new_messages):
-            body = microblog.support.xml_escape(message.text)
-            image = hasattr(message, "image_path") and message.image_path or ''
-            expire_timeout = 5000 + (index*2000) # default to 5 second timeout and increase by 2 second for each notification
-            n = gintegration.notify(message.sender, body, image, ["reply", "Reply"], expire_timeout)
-            self.notification_bubbles[n] = message
-    gtk.gdk.threads_leave()
-
-  def flag_duplicates(self, data):
-    seen = {} 
-    for n, message in enumerate(data):
-      if hasattr(message, "gId") and message.gId:
-        message.is_duplicate = message.gId in seen
-        message.first_seen = False
-        if message.is_duplicate:
-          data[seen[message.gId]].dupes.append(message)
-
-        if not message.is_duplicate:
-          message.first_seen = True
-          seen[message.gId] = n
-      else:
-        message.is_duplicate = False
-        message.first_seen = True
-
-  def is_gwibber_active(self):
-    screen = wnck.screen_get_default()
-    screen.force_update()
-    w = screen.get_active_window()
-    if w: return self.window.xid == w.get_xid()
-    return False
-    
-  def manage_indicator_items(self, data, tab_num=None):
-    if not self.is_gwibber_active():
-      for msg in data:
-        if hasattr(msg, "first_seen") and msg.first_seen and \
-            hasattr(msg, "is_unread") and msg.is_unread and \
-            hasattr(msg, "gId") and msg.gId not in self.indicator_items:
-          indicator = indicate.IndicatorMessage()
-          indicator.set_property("subtype", "im")
-          indicator.set_property("sender", msg.sender_nick)
-          indicator.set_property("body", msg.text)
-          indicator.set_property_time("time", msg.time.gmticks())
-          if hasattr(msg, "image_path"):
-            pb = gtk.gdk.pixbuf_new_from_file(msg.image_path)
-            indicator.set_property_icon("icon", pb)
-
-          if tab_num is not None:
-            indicator.set_property("gwibber_tab", str(tab_num))
-          indicator.connect("user-display", self.on_indicator_activate)
-
-          self.indicator_items[msg.gId] = indicator
-          indicator.show()
-
-  def update_view_contents(self, view):
-    view.load_messages()
-
-  def update(self, tabs = None):
-    self.throbber.set_from_animation(
+  def on_action(self, widget, uri, cmd, query, view):
+    if hasattr(actions, cmd):
+      if "msg" in query:
+        query["msg"] = self.get_message(query["msg"])
+      getattr(actions, cmd).action(view, self, **query)
+
+  def on_stream_closed(self, widget, id, kind):
+    self.model.streams.Delete(id)
+    self.model.searches.Delete(id)
+
+  def on_stream_changed(self, widget, stream):
+    self.update_menu_availability()
+    if stream["stream"]:
+      gobject.idle_add(lambda: self.service.UpdateIndicators(stream["stream"]))
+
+  def on_input_changed(self, w, text, cnt):
+    self.input.textview.set_overlay_text(str(MAX_MESSAGE_LENGTH - cnt))
+
+  def on_input_cleared(self, seq):
+      self.message_target.end()
+      self.input.clear()
+
+  def on_input_activate(self, w, text, cnt):
+    self.send_message(text)
+    self.input.clear()
+
+  def on_button_send_clicked(self, w):
+    self.send_message(self.input.get_text())
+    self.input.clear()
+
+  def send_message(self, text):
+    if len(text) == 0:
+      return
+    target = self.message_target.target
+    action = self.message_target.action
+
+    if target:
+      if action == "reply":
+        data = {"message": text, "target": target}
+        self.service.Send(json.dumps(data))
+      elif action == "repost":
+        data = {"message": text, "accounts": [target["account"]]}
+        self.service.Send(json.dumps(data))
+      elif action == "private":
+        data = {"message": text, "private": target}
+        self.service.Send(json.dumps(data))
+      self.message_target.end()
+    else: self.service.SendMessage(text)
+
+  def on_new_stream(self, *args):
+    if isinstance(self.stream_view, gwui.MultiStreamUi):
+      self.stream_view.new_stream()
+    else:
+      self.set_view("MultiStreamUi")
+      self.stream_view.new_stream()
+
+  def on_loading_started(self, *args):
+    self.loading_spinner.set_from_animation(
       gtk.gdk.PixbufAnimation(resources.get_ui_asset("progress.gif")))
-    self.target_tabs = tabs
 
-    def process():
-      try:
-        next_update = mx.DateTime.gmt()
-        if not self.target_tabs:
-          self.target_tabs = self.tabs.get_children()
+  def on_loading_complete(self, *args):
+    self.loading_spinner.clear()
+    self.update_view()
 
-        for tab in self.target_tabs:
-          view = tab.get_child()
-          if view and view.props.visible:
-            view.message_store = [m for m in
-              view.data_retrieval_handler() if not self.last_clear or m.time > self.last_clear
-              and m.time <= mx.DateTime.gmt()]
-            self.flag_duplicates(view.message_store)
-            gtk.gdk.threads_enter()
-            gobject.idle_add(self.update_view_contents, view)
-            
-            if indicate and hasattr(view, "add_indicator") and view.add_indicator:
-              self.manage_indicator_items(view.message_store, tab_num=self.tabs.page_num(tab))
+  def on_connection_online(self, *args):
+    log.logger.info("Setting to Online")
+    self.actions.get_action("refresh").set_sensitive(True)
 
-            gtk.gdk.threads_leave()
-            if tab.show_notifications: self.show_notification_bubbles(view.message_store)
+  def on_connection_offline(self, *args):
+    log.logger.info("Setting to Offline")
+    self.actions.get_action("refresh").set_sensitive(False)
 
-        self.statusbar.pop(0)
-        self.statusbar.push(0, _("Last update: %s") % time.strftime("%X"))
-        self.last_update = next_update
+class Client(dbus.service.Object):
+  __dbus_object_path__ = "/com/GwibberClient"
 
-      finally: gobject.idle_add(self.throbber.clear)
+  def __init__(self):
+    # Setup a Client dbus interface
+    self.bus = dbus.SessionBus()
+    self.bus_name = dbus.service.BusName("com.GwibberClient", self.bus)
+    dbus.service.Object.__init__(self, self.bus_name, self.__dbus_object_path__)
 
-    t = threading.Thread(target=process)
-    t.setDaemon(True)
-    t.start()
+    # Methods the client exposes via dbus, return from the list method
+    self.exposed_methods = ["focus_client", "show_stream"]
+    self.w = GwibberClient()
 
-    return True
+  @dbus.service.method("com.GwibberClient", in_signature="", out_signature="")
+  def focus_client(self):
+    """
+    This method focuses the client UI displaying the default view.
+    Currently used when the client is activated via dbus activation.
+    """
+    self.w.present_with_time(int(time.mktime(datetime.datetime.now().timetuple())))
+    try:
+      self.w.move(*self.w.model.settings["window_position"])
+    except:
+      pass
 
-if __name__ == '__main__':
-  w = GwibberClient()
-  gtk.main()
+  @dbus.service.method("com.GwibberClient", in_signature="s", out_signature="")
+  def show_stream(self, stream):
+    """
+    This method focuses the client UI and displays the replies view.
+    Currently used when activated via the messaging indicator.
+    """
+    self.w.present_with_time(int(time.mktime(datetime.datetime.now().timetuple())))
+    self.w.move(*self.w.model.settings["window_position"])
+    stream = {'account': None, 'stream': stream, 'transient': False}
+    if isinstance(self.w.stream_view, gwui.MultiStreamUi):
+      streams = self.w.stream_view.get_state()
+      if stream["stream"] not in str(streams):
+        streams.append(stream)
+        self.w.stream_view.set_state(streams)
+    else:
+      self.w.stream_view.set_state([stream])
 
+  @dbus.service.method("com.GwibberClient")
+  def list(self):
+    """
+    This method returns a list of exposed dbus methods
+    """
+    return self.exposed_methods

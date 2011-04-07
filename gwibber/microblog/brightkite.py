@@ -5,7 +5,7 @@ SegPhault (Ryan Paul) - 10/19/2008
 
 """
 
-from . import can, support
+from . import support
 import urllib2, urllib, base64, re, simplejson
 from xml.dom import minidom
 
@@ -22,14 +22,9 @@ PROTOCOL_INFO = {
   ],
 
   "features": [
-    #can.SEND,
-    can.RECEIVE,
-    #can.SEARCH,
-    #can.REPLY,
-    can.RESPONSES,
-    #can.DELETE,
-    can.THREAD,
-    can.GEO_FRIEND_POSITIONS
+    "receive",
+    "responses",
+    "thread",
   ],
 }
 
@@ -39,7 +34,7 @@ class Message:
   def __init__(self, client, data):
     self.client = client
     self.account = client.account
-    self.protocol = client.account["protocol"]
+    self.service = client.account["service"]
     self.username = client.account["username"]
 
     self.sender = data["creator"]["fullname"]
@@ -77,7 +72,7 @@ class Comment:
   def __init__(self, client, data):
     self.client = client
     self.account = client.account
-    self.protocol = client.account["protocol"]
+    self.service = client.account["service"]
     self.username = client.account["username"]
 
     self.sender = data["user"]["fullname"]
@@ -102,7 +97,7 @@ class FriendPosition:
   def __init__(self, client, data):
     self.client = client
     self.account = client.account
-    self.protocol = client.account["protocol"]
+    self.service = client.account["service"]
     self.username = client.account["username"]
     self.sender = data["fullname"]
     self.sender_nick = data["login"]
@@ -156,7 +151,7 @@ class Client:
       urllib2.Request("http://identi.ca/search/notice/rss",
         urllib.urlencode({"q": query}))).read()).getElementsByTagName("item")
 
-  def get_thread(self, msg):
+  def thread(self, msg):
     yield msg
     for data in self.get_thread_data(msg):
       yield Comment(self, data)

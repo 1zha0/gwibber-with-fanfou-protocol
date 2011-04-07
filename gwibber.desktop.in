@@ -1,8 +1,32 @@
 [Desktop Entry]
-_Name=Gwibber Microblogging Client
+_Name=Gwibber
+_GenericName=Social Client
+_X-GNOME-FullName=Gwibber Social Client
 Type=Application
-_Comment=Microblogging client for GNOME
+_Comment=Update your microblog and follow your contacts' statuses
 Exec=gwibber
 Icon=gwibber
-Categories=Network;
-_GenericName=Microblogging Client
+Categories=GTK;GNOME;Network;
+X-GNOME-Gettext-Domain=gwibber
+X-Ayatana-Desktop-Shortcuts=Gwibber;Refresh;Accounts;Preferences;Quit
+X-Ayatana-Appmenu-Show-Stubs=False
+
+[Refresh Shortcut Group]
+_Name=Refresh
+Exec=gwibber-client -r
+TargetEnvironment=Unity
+
+[Accounts Shortcut Group]
+_Name=Accounts
+Exec=gwibber-accounts
+TargetEnvironment=Unity
+
+[Preferences Shortcut Group]
+_Name=Preferences
+Exec=gwibber-preferences
+TargetEnvironment=Unity
+
+[Quit Shortcut Group]
+_Name=Quit
+Exec=gwibber-client -q
+TargetEnvironment=Unity
